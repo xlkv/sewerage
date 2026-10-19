@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'network_graph.dart';
 import 'package:yandex_maps_mapkit_lite/image.dart' as ymk_image;
 import 'package:yandex_maps_mapkit_lite/mapkit.dart' as ymk;
 
@@ -78,6 +79,12 @@ class MapObjectsLayer {
 
   static const double pipeStrokeWidthDp = 5.0;
   static const double pipeSelectedStrokeWidthDp = 8.0;
+
+  /// Zoom from which pipe length/diameter labels are shown.
+  static const double pipeLabelMinZoom = 16.0;
+
+  static const Color traceDownColor = AppColors.brand;
+  static const Color traceUpColor = Color(0xFF6366F1);
 
   /// Max objects animated at once (flow dashes, pulse halos) — DESIGN §2.
   static const int maxAnimatedObjects = 40;
@@ -320,6 +327,21 @@ class MapObjectsLayerController {
   /// False when the OS asks to reduce motion.
   bool animationsEnabled = true;
 
+  /// "Quyosh" appearance: thicker, higher-contrast pipes.
+  bool highContrast = false;
+
+  late final ymk.MapObjectCollection _traceCollection;
+  late final ymk.MapObjectCollection _labelsCollection;
+  late final ymk.MapObjectCollection _rubberCollection;
+  final Map<String, ymk.PolylineMapObject> _traceLines = {};
+  final Map<String, String> _traceKeys = {};
+  final Map<String, ymk.PlacemarkMapObject> _pipeLabels = {};
+  final Map<String, String> _pipeLabelTexts = {};
+  final Map<String, Pipe> _pipesById = {};
+  ymk.PolylineMapObject? _rubberLine;
+  FlowTrace? _trace;
+  bool _showLabels = false;
+
   bool get hasActiveAnimations =>
       animationsEnabled &&
       (_flowPolylines.isNotEmpty ||
@@ -342,10 +364,14 @@ class MapObjectsLayerController {
     required this.onManholeMoved,
   }) {
     // Sub-collections ordered back-to-front:
-    // pipes -> flow dashes -> arrows -> pulse halos -> manholes.
+    // trace glow -> pipes -> flow dashes -> arrows -> rubber band ->
+    // labels -> pulse halos -> manholes.
+    _traceCollection = rootCollection.addCollection();
     _pipesCollection = rootCollection.addCollection();
     _flowCollection = rootCollection.addCollection();
     _arrowsCollection = rootCollection.addCollection();
+    _rubberCollection = rootCollection.addCollection();
+    _labelsCollection = rootCollection.addCollection();
     _haloCollection = rootCollection.addCollection();
     _manholesCollection = rootCollection.addCollection();
   }
@@ -358,7 +384,13 @@ class MapObjectsLayerController {
     required Selection? selection,
     required MapMode mode,
     required double zoom,
+    FlowTrace? trace,
   }) {
+    _trace = trace;
+    _showLabels = zoom >= MapObjectsLayer.pipeLabelMinZoom;
+    _pipesById
+      ..clear()
+      ..addAll(allPipes);
     final movingManholeId = mode is MoveManholeMode ? mode.manholeId : null;
 
     final visibleManholes = MapObjectsLayer.filterManholes(
@@ -389,6 +421,8 @@ class MapObjectsLayerController {
       mode: mode,
     );
 
+    _syncTrace();
+    _syncLabels();
     _syncFlows();
     _syncHalos();
     _initialSyncDone = true;
@@ -727,15 +761,18 @@ class MapObjectsLayerController {
   }
 
   /// Casing (white outline) + status core; planned is dashed; selected glows.
-  static void _applyPipeStyle(
+  void _applyPipeStyle(
     ymk.PolylineMapObject polyline,
     _PipeSnapshot snapshot,
   ) {
     polyline.setStrokeColor(AppColors.forStatus(snapshot.status));
     final planned = snapshot.status == WorkStatus.planned;
     polyline.style = ymk.LineStyle(
-      strokeWidth: snapshot.widthDp + (snapshot.isSelected ? 2.0 : 0.0),
-      outlineWidth: snapshot.isSelected ? 3.0 : 2.0,
+      strokeWidth:
+          snapshot.widthDp +
+          (snapshot.isSelected ? 2.0 : 0.0) +
+          (highContrast ? 2.0 : 0.0),
+      outlineWidth: snapshot.isSelected ? 3.0 : (highContrast ? 2.5 : 2.0),
       outlineColor: snapshot.isSelected
           ? AppColors.brand.withValues(alpha: 0.45)
           : Colors.white,
@@ -759,18 +796,22 @@ class MapObjectsLayerController {
   void _syncFlows() {
     final wanted = <String>[];
     if (animationsEnabled) {
+      final traced = {
+        ...?_trace?.downstreamPipes,
+        ...?_trace?.upstreamPipes,
+      };
+      int rank(MapEntry<String, _PipeSnapshot> e) =>
+          (e.value.isSelected ? 2 : 0) + (traced.contains(e.key) ? 1 : 0);
       final candidates =
           _pipeSnapshots.entries
               .where(
                 (e) =>
                     e.value.isSelected ||
+                    traced.contains(e.key) ||
                     e.value.status == WorkStatus.inProgress,
               )
               .toList()
-            ..sort(
-              (a, b) =>
-                  (b.value.isSelected ? 1 : 0) - (a.value.isSelected ? 1 : 0),
-            );
+            ..sort((a, b) => rank(b) - rank(a));
       wanted.addAll(
         candidates.take(MapObjectsLayer.maxAnimatedObjects).map((e) => e.key),
       );
@@ -839,6 +880,197 @@ class MapObjectsLayerController {
       }
       halo.geometry = point;
     }
+  }
+
+  /// Wide translucent glow under traced pipes: teal downstream, indigo
+  /// upstream. Flow dashes on them come from [_syncFlows].
+  void _syncTrace() {
+    final wanted = <String, Color>{};
+    final t = _trace;
+    if (t != null) {
+      for (final id in t.upstreamPipes) {
+        wanted[id] = MapObjectsLayer.traceUpColor;
+      }
+      for (final id in t.downstreamPipes) {
+        wanted[id] = MapObjectsLayer.traceDownColor;
+      }
+    }
+    for (final id in _traceLines.keys.toList()) {
+      final snapshot = _pipeSnapshots[id];
+      if (wanted.containsKey(id) && snapshot != null) continue;
+      final line = _traceLines.remove(id);
+      _traceKeys.remove(id);
+      if (line != null && line.isValid()) _traceCollection.remove(line);
+    }
+    for (final entry in wanted.entries) {
+      final snapshot = _pipeSnapshots[entry.key];
+      if (snapshot == null) continue;
+      final key =
+          '${entry.value.toARGB32()}|${snapshot.fromLat},${snapshot.fromLng},'
+          '${snapshot.toLat},${snapshot.toLng}|${snapshot.widthDp}';
+      if (_traceKeys[entry.key] == key) continue;
+      var line = _traceLines[entry.key];
+      final geometry = ymk.Polyline([
+        ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
+        ymk.Point(latitude: snapshot.toLat, longitude: snapshot.toLng),
+      ]);
+      if (line == null || !line.isValid()) {
+        line = _traceCollection.addPolylineWithGeometry(geometry);
+        _traceLines[entry.key] = line;
+      } else {
+        line.geometry = geometry;
+      }
+      line.setStrokeColor(entry.value.withValues(alpha: 0.32));
+      line.style = ymk.LineStyle(strokeWidth: snapshot.widthDp + 12);
+      _traceKeys[entry.key] = key;
+    }
+  }
+
+  /// "48 m · Ø315" pills under pipe midpoints at close zoom.
+  void _syncLabels() {
+    final wanted = <String, String>{};
+    if (_showLabels) {
+      for (final entry in _pipeSnapshots.entries) {
+        final pipe = _pipesById[entry.key];
+        if (pipe == null) continue;
+        wanted[entry.key] =
+            '${GeoUtils.formatLength(pipe.lengthM)} · Ø${pipe.diameterMm}';
+      }
+    }
+    for (final id in _pipeLabels.keys.toList()) {
+      if (wanted.containsKey(id)) continue;
+      final label = _pipeLabels.remove(id);
+      _pipeLabelTexts.remove(id);
+      if (label != null && label.isValid()) _labelsCollection.remove(label);
+    }
+    for (final entry in wanted.entries) {
+      final snapshot = _pipeSnapshots[entry.key]!;
+      final mid = GeoUtils.midpoint(
+        snapshot.fromLat,
+        snapshot.fromLng,
+        snapshot.toLat,
+        snapshot.toLng,
+      );
+      var label = _pipeLabels[entry.key];
+      if (label == null || !label.isValid()) {
+        label = _labelsCollection.addPlacemark();
+        final id = entry.key;
+        label.addTapListener(
+          _flowTapListeners.putIfAbsent(
+            'label_$id',
+            () => _TapListenerImpl((_) => onPipeTap(id)),
+          ),
+        );
+        _pipeLabels[entry.key] = label;
+      }
+      label.geometry = ymk.Point(latitude: mid.lat, longitude: mid.lng);
+      if (_pipeLabelTexts[entry.key] != entry.value) {
+        label.setIconWithStyle(
+          _labelIconProvider(entry.value),
+          const ymk.IconStyle(anchor: math.Point(0.5, -0.45), zIndex: 4.0),
+        );
+        _pipeLabelTexts[entry.key] = entry.value;
+      }
+    }
+  }
+
+  /// Re-applies pipe styles (e.g. after switching the "Quyosh" appearance).
+  void restylePipes() {
+    for (final entry in _pipePolylines.entries) {
+      final snapshot = _pipeSnapshots[entry.key];
+      if (snapshot != null && entry.value.isValid()) {
+        _applyPipeStyle(entry.value, snapshot);
+      }
+    }
+  }
+
+  /// Dashed preview line while drawing a pipe (null clears it).
+  void setRubberBand(
+    ({double lat, double lng})? from,
+    ({double lat, double lng})? to, {
+    bool snapped = false,
+  }) {
+    if (from == null || to == null) {
+      final line = _rubberLine;
+      if (line != null && line.isValid()) _rubberCollection.remove(line);
+      _rubberLine = null;
+      return;
+    }
+    final geometry = ymk.Polyline([
+      ymk.Point(latitude: from.lat, longitude: from.lng),
+      ymk.Point(latitude: to.lat, longitude: to.lng),
+    ]);
+    var line = _rubberLine;
+    if (line == null || !line.isValid()) {
+      line = _rubberCollection.addPolylineWithGeometry(geometry);
+      _rubberLine = line;
+    } else {
+      line.geometry = geometry;
+    }
+    line.setStrokeColor(snapped ? AppColors.brand : AppColors.ink);
+    line.style = ymk.LineStyle(
+      strokeWidth: snapped ? 5.0 : 3.5,
+      outlineWidth: 2.0,
+      outlineColor: Colors.white,
+      dashLength: snapped ? 0.0 : 9.0,
+      gapLength: snapped ? 0.0 : 6.0,
+    );
+  }
+
+  static final Map<String, ymk_image.ImageProvider> _labelIconCache = {};
+
+  static ymk_image.ImageProvider _labelIconProvider(String text) {
+    return _labelIconCache.putIfAbsent(
+      text,
+      () => ymk_image.ImageProvider(
+        () => _drawLabelImage(text),
+        cacheable: true,
+        id: 'label_$text',
+      ),
+    );
+  }
+
+  static Future<ui.Image> _drawLabelImage(String text) async {
+    final dpr =
+        (ui.PlatformDispatcher.instance.views.firstOrNull?.devicePixelRatio ??
+                2.75)
+            .clamp(2.0, 3.5);
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: AppTheme.fontFamily,
+          color: AppColors.ink,
+          fontSize: 11 * dpr,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final padX = 7 * dpr;
+    final padY = 3.5 * dpr;
+    final w = (painter.width + padX * 2).ceilToDouble();
+    final h = (painter.height + padY * 2).ceilToDouble();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final rect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(1, 1, w - 2, h - 2),
+      Radius.circular(h / 2),
+    );
+    canvas.drawRRect(rect, Paint()..color = Colors.white);
+    canvas.drawRRect(
+      rect,
+      Paint()
+        ..color = AppColors.line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1 * dpr,
+    );
+    painter.paint(canvas, Offset(padX, padY));
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(w.toInt(), h.toInt());
+    picture.dispose();
+    return image;
   }
 
   /// Advances all map animations; called by the screen's ticker (≤ 30 fps).

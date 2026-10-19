@@ -1,7 +1,14 @@
+import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../shared/widgets/map_controls.dart';
 import 'network_stats_card.dart';
+import 'feature_providers.dart';
+import 'map_overlays.dart';
+import 'network_graph.dart';
+import '../report/network_report.dart';
+import 'package:flutter/services.dart';
+import 'package:printing/printing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -44,9 +51,9 @@ class _MapInputListenerImpl implements ymk.MapInputListener {
 }
 
 class _MapCameraListenerImpl implements ymk.MapCameraListener {
-  final void Function(double zoom) onZoomChanged;
+  final void Function(ymk.CameraPosition position) onCameraChanged;
 
-  _MapCameraListenerImpl({required this.onZoomChanged});
+  _MapCameraListenerImpl({required this.onCameraChanged});
 
   @override
   void onCameraPositionChanged(
@@ -55,7 +62,7 @@ class _MapCameraListenerImpl implements ymk.MapCameraListener {
     ymk.CameraUpdateReason cameraUpdateReason,
     bool finished,
   ) {
-    onZoomChanged(cameraPosition.zoom);
+    onCameraChanged(cameraPosition);
   }
 }
 
@@ -101,6 +108,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _savingMove = false;
   bool _locatingGps = false;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  ({double lat, double lng})? _cameraTarget;
+  final _rubberInfo = ValueNotifier<RubberBandInfo?>(null);
+  String? _lastSnapId;
+  Timer? _timelineTimer;
 
   @override
   void initState() {
@@ -130,6 +141,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   @override
   void dispose() {
     _animationTimer?.cancel();
+    _timelineTimer?.cancel();
+    _rubberInfo.dispose();
     _lifecycleListener?.dispose();
     final map = _mapWindow?.map;
     if (map != null && map.isValid()) {
@@ -161,7 +174,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       'TuronMapKit: YandexMap onMapCreated (mapValid=${map.isValid()})',
     );
     _initSatelliteTileLayer(map, ref.read(mapLayerProvider));
-    _applyBlueprintStyle(map);
+    _applyAppearance(ref.read(mapAppearanceProvider));
 
     _inputListener = _MapInputListenerImpl(
       onTap: (point) {
@@ -173,13 +186,22 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     map.addInputListener(_inputListener!);
 
     _cameraListener = _MapCameraListenerImpl(
-      onZoomChanged: (zoom) {
+      onCameraChanged: (position) {
+        final zoom = position.zoom;
         final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
         final nextBucket = MapObjectsLayer.zoomBucket(zoom);
+        const labelZoom = MapObjectsLayer.pipeLabelMinZoom;
+        final labelsChanged =
+            (_currentZoom >= labelZoom) != (zoom >= labelZoom);
         _currentZoom = zoom;
-        if (prevBucket != nextBucket) {
+        _cameraTarget = (
+          lat: position.target.latitude,
+          lng: position.target.longitude,
+        );
+        if (prevBucket != nextBucket || labelsChanged) {
           _syncMapObjects();
         }
+        _updateRubberBand();
       },
     );
     map.addCameraListener(_cameraListener!);
@@ -233,13 +255,180 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       '[{"tags":{"any":["poi"]},"stylers":{"visibility":"off"}},'
       '{"stylers":{"saturation":-0.8,"lightness":0.12}}]';
 
-  void _applyBlueprintStyle(ymk.Map map) {
+  void _applyAppearance(MapAppearance appearance) {
+    final map = _mapWindow?.map;
+    if (map == null || !map.isValid()) return;
     try {
-      final ok = map.setMapStyle(_blueprintMapStyle);
-      debugPrint('TuronMapKit: blueprint map style applied=$ok');
+      final ok = map.setMapStyle(
+        appearance == MapAppearance.blueprint ? _blueprintMapStyle : '[]',
+      );
+      map.nightModeEnabled = appearance == MapAppearance.night;
+      debugPrint('TuronMapKit: map appearance=${appearance.name} style=$ok');
     } catch (e) {
-      debugPrint('TuronMapKit: blueprint map style failed: $e');
+      debugPrint('TuronMapKit: map appearance failed: $e');
     }
+    final controller = _layerController;
+    if (controller != null &&
+        controller.highContrast != (appearance == MapAppearance.sun)) {
+      controller.highContrast = appearance == MapAppearance.sun;
+      controller.restylePipes();
+    }
+  }
+
+  /// Live data, or the network as it was at the timeline's date.
+  ({Map<String, Manhole> manholes, Map<String, Pipe> pipes}) _networkData() {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final timeline = ref.read(timelineProvider);
+    if (timeline == null) return (manholes: manholes, pipes: pipes);
+    final events = ref.read(statusEventsProvider).asData?.value ?? const [];
+    final snap = NetworkSnapshot.at(timeline.at, manholes, pipes, events);
+    return (manholes: snap.manholes, pipes: snap.pipes);
+  }
+
+  /// Rubber band from the first chosen manhole to the map centre; snaps to
+  /// a manhole near the centre (≈ 28 dp).
+  void _updateRubberBand() {
+    final controller = _layerController;
+    final mode = ref.read(mapControllerProvider).mode;
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final from = mode is AddPipeMode && mode.fromManholeId != null
+        ? manholes[mode.fromManholeId]
+        : null;
+    final target = _cameraTarget;
+    if (controller == null || from == null || target == null) {
+      controller?.setRubberBand(null, null);
+      _rubberInfo.value = null;
+      _lastSnapId = null;
+      return;
+    }
+    final metersPerDp =
+        156543.03392 *
+        math.cos(target.lat * math.pi / 180) /
+        math.pow(2, _currentZoom);
+    final threshold = 28 * metersPerDp;
+    Manhole? snap;
+    var best = double.infinity;
+    for (final m in manholes.values) {
+      if (m.id == from.id) continue;
+      final d = GeoUtils.haversineMeters(target.lat, target.lng, m.lat, m.lng);
+      if (d < threshold && d < best) {
+        best = d;
+        snap = m;
+      }
+    }
+    final end = snap != null ? (lat: snap.lat, lng: snap.lng) : target;
+    controller.setRubberBand(
+      (lat: from.lat, lng: from.lng),
+      end,
+      snapped: snap != null,
+    );
+    if (snap?.id != _lastSnapId) {
+      _lastSnapId = snap?.id;
+      if (snap != null) HapticFeedback.selectionClick();
+    }
+    _rubberInfo.value = RubberBandInfo(
+      meters: GeoUtils.haversineMeters(from.lat, from.lng, end.lat, end.lng),
+      snappedId: snap?.id,
+      snappedCode: snap?.code,
+    );
+  }
+
+  void _updateTimelineLoop(TimelineState? timeline) {
+    final playing = timeline?.playing ?? false;
+    if (playing && _timelineTimer == null) {
+      var last = DateTime.now();
+      _timelineTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+        final now = DateTime.now();
+        ref.read(timelineProvider.notifier).step(now.difference(last));
+        last = now;
+      });
+    } else if (!playing) {
+      _timelineTimer?.cancel();
+      _timelineTimer = null;
+    }
+  }
+
+  void _fitTo(Iterable<({double lat, double lng})> points) {
+    final list = points.toList();
+    if (list.isEmpty) return;
+    var minLat = list.first.lat, maxLat = list.first.lat;
+    var minLng = list.first.lng, maxLng = list.first.lng;
+    for (final p in list) {
+      minLat = math.min(minLat, p.lat);
+      maxLat = math.max(maxLat, p.lat);
+      minLng = math.min(minLng, p.lng);
+      maxLng = math.max(maxLng, p.lng);
+    }
+    final spanM = math.max(
+      GeoUtils.haversineMeters(minLat, minLng, maxLat, minLng),
+      GeoUtils.haversineMeters(minLat, minLng, minLat, maxLng),
+    );
+    final widthDp = MediaQuery.sizeOf(context).width * 0.7;
+    final metersPerDp = math.max(spanM, 60) / widthDp;
+    final zoom = (math.log(
+              156543.03392 *
+                  math.cos((minLat + maxLat) / 2 * math.pi / 180) /
+                  metersPerDp,
+            ) /
+            math.ln2)
+        .clamp(3.0, 18.0);
+    _moveCamera(
+      ymk.CameraPosition(
+        ymk.Point(latitude: (minLat + maxLat) / 2, longitude: (minLng + maxLng) / 2),
+        zoom: zoom,
+        azimuth: 0,
+        tilt: 0,
+      ),
+    );
+  }
+
+  Future<void> _shareReport() async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Hisobot tayyorlanmoqda…')),
+    );
+    try {
+      final bytes = await NetworkReport.build(
+        manholes: ref.read(manholesProvider).asData?.value ?? const {},
+        pipes: ref.read(pipesProvider).asData?.value ?? const {},
+        masters: ref.read(mastersProvider).asData?.value ?? const [],
+      );
+      final d = DateTime.now();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename:
+            'turon-hisobot-${d.year}-${d.month.toString().padLeft(2, '0')}-'
+            '${d.day.toString().padLeft(2, '0')}.pdf',
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Hisobot tayyorlab bo\'lmadi: $e')),
+      );
+    }
+  }
+
+  void _openSearch() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SearchSheet(
+        manholes: ref.read(manholesProvider).asData?.value ?? const {},
+        pipes: ref.read(pipesProvider).asData?.value ?? const {},
+        onSelect: (selection) {
+          Navigator.of(sheetContext).pop();
+          ref.read(traceProvider.notifier).clear();
+          ref.read(mapControllerProvider.notifier).select(selection);
+        },
+      ),
+    );
+  }
+
+  void _openTimeline() {
+    final events = ref.read(statusEventsProvider).asData?.value ?? const [];
+    ref.read(mapControllerProvider.notifier).clearSelection();
+    ref.read(traceProvider.notifier).clear();
+    ref.read(timelineProvider.notifier).open(events);
   }
 
   // One ticker for all map animations; runs only while something animates
@@ -527,10 +716,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final controller = _layerController;
     if (controller == null) return;
 
-    final allManholes = ref.read(manholesProvider).asData?.value ?? const {};
-    final allPipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final data = _networkData();
+    final allManholes = data.manholes;
+    final allPipes = data.pipes;
     final activeStatuses = ref.read(statusFilterProvider);
     final mapState = ref.read(mapControllerProvider);
+    final traceId = ref.read(traceProvider);
+    final trace = traceId != null && ref.read(timelineProvider) == null
+        ? NetworkGraph.trace(traceId, allPipes.values)
+        : null;
 
     controller.animationsEnabled = !MediaQuery.disableAnimationsOf(context);
     controller.sync(
@@ -540,6 +734,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       selection: mapState.selection,
       mode: mapState.mode,
       zoom: _currentZoom,
+      trace: trace,
     );
     _updateAnimationLoop();
   }
@@ -665,6 +860,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           ),
           onSelectPipe: (pipeId) => notifier.select(PipeSelection(pipeId)),
           onDeleted: notifier.clearSelection,
+          onTrace: () {
+            ref.read(traceProvider.notifier).show(id);
+            notifier.clearSelection();
+          },
         );
       case PipeSelection(:final id):
         final pipe = pipes[id];
@@ -693,9 +892,37 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final mapState = ref.watch(mapControllerProvider);
     final mapLayer = ref.watch(mapLayerProvider);
     final activeStatuses = ref.watch(statusFilterProvider);
+    final traceId = ref.watch(traceProvider);
+    final timeline = ref.watch(timelineProvider);
+    ref.watch(statusEventsProvider);
 
     ref.listen<MapLayer>(mapLayerProvider, (_, next) {
       _applyMapLayer(next);
+    });
+
+    ref.listen<MapAppearance>(mapAppearanceProvider, (_, next) {
+      _applyAppearance(next);
+    });
+
+    ref.listen<String?>(traceProvider, (_, next) {
+      _syncMapObjects();
+      if (next == null) return;
+      final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+      final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+      final t = NetworkGraph.trace(next, pipes.values);
+      _fitTo([
+        for (final id in {next, ...t.downstreamManholes, ...t.upstreamManholes})
+          if (manholes[id] != null) (lat: manholes[id]!.lat, lng: manholes[id]!.lng),
+      ]);
+    });
+
+    ref.listen<TimelineState?>(timelineProvider, (prev, next) {
+      _updateTimelineLoop(next);
+      _syncMapObjects();
+    });
+
+    ref.listen(statusEventsProvider, (_, _) {
+      if (ref.read(timelineProvider) != null) _syncMapObjects();
     });
 
     ref.listen<MapState>(mapControllerProvider, (prev, next) {
@@ -706,6 +933,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ref.read(mapControllerProvider.notifier).clearSnackbar();
       }
       _syncMapObjects();
+      _updateRubberBand();
       if (next.selection != null &&
           next.selection != prev?.selection &&
           next.mode is ViewMode &&
@@ -756,7 +984,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       masters: allMasters,
     );
 
-    final detailsBuilder = _buildDetailsBuilder(
+    final net = _networkData();
+    final detailsBuilder = timeline != null
+        ? null
+        : _buildDetailsBuilder(
       selection: mapState.selection,
       mode: mapState.mode,
       manholes: allManholes,
@@ -789,6 +1020,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         drawer: _TuronNavigationDrawer(
           isAdmin: isAdmin,
           fullName: profile?.fullName,
+          onTimeline: _openTimeline,
+          onReport: _shareReport,
           onSignOut: () async {
             await ref.read(authRepoProvider).signOut();
           },
@@ -848,14 +1081,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             const _BrandPill(),
                             const Spacer(),
                             MapRoundButton(
+                              icon: Icons.search_rounded,
+                              tooltip: 'Qidirish',
+                              onPressed: _openSearch,
+                            ),
+                            const SizedBox(width: 10),
+                            MapRoundButton(
                               icon: mapLayer == MapLayer.scheme
-                                  ? Icons.satellite_alt_outlined
-                                  : Icons.map_outlined,
-                              tooltip: mapLayer == MapLayer.scheme
-                                  ? 'Sun\'iy yo\'ldosh qatlamiga o\'tish'
-                                  : 'Sxema qatlamiga o\'tish',
-                              onPressed: () =>
-                                  ref.read(mapLayerProvider.notifier).toggle(),
+                                  ? Icons.layers_outlined
+                                  : Icons.satellite_alt_outlined,
+                              tooltip: 'Xarita ko\'rinishi',
+                              onPressed: () => showModalBottomSheet<void>(
+                                context: context,
+                                builder: (_) => const MapStyleSheet(),
+                              ),
                             ),
                             const SizedBox(width: 10),
                             MapRoundButton(
@@ -905,11 +1144,27 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                       .read(mapControllerProvider.notifier)
                                       .cancelMode(),
                                 )
+                              : traceId != null &&
+                                    timeline == null &&
+                                    allManholes[traceId] != null
+                              ? TraceLegendCard(
+                                  key: ValueKey('trace_$traceId'),
+                                  origin: allManholes[traceId]!,
+                                  trace: NetworkGraph.trace(
+                                    traceId,
+                                    allPipes.values,
+                                  ),
+                                  pipes: allPipes,
+                                  manholes: allManholes,
+                                  onClose: () => ref
+                                      .read(traceProvider.notifier)
+                                      .clear(),
+                                )
                               : NetworkStatsCard(
                                   key: const ValueKey('stats'),
                                   stats: NetworkStats.from(
-                                    allManholes.values,
-                                    allPipes.values,
+                                    net.manholes.values,
+                                    net.pipes.values,
                                   ),
                                 ),
                         ),
@@ -941,8 +1196,38 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   ),
                 ),
               ),
+              if (mapState.mode is AddPipeMode &&
+                  (mapState.mode as AddPipeMode).fromManholeId != null)
+                Positioned.fill(
+                  child: RubberBandOverlay(
+                    info: _rubberInfo,
+                    onConnect: (id) => ref
+                        .read(mapControllerProvider.notifier)
+                        .onManholeTap(id, existingPipes: allPipes.values),
+                  ),
+                ),
+              if (timeline != null)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  child: SafeArea(
+                    top: false,
+                    child: TimelinePanel(
+                      timeline: timeline,
+                      completedMeters: NetworkStats.from(
+                        net.manholes.values,
+                        net.pipes.values,
+                      ).meters[WorkStatus.completed]!,
+                      totalMeters: NetworkStats.from(
+                        allManholes.values,
+                        allPipes.values,
+                      ).totalMeters,
+                    ),
+                  ),
+                ),
               // Bottom-right: my location + admin speed dial
-              if (mapState.activeForm == null)
+              if (mapState.activeForm == null && timeline == null)
                 Positioned(
                   right: 16,
                   bottom: 16,
@@ -1003,17 +1288,31 @@ class _TuronNavigationDrawer extends StatelessWidget {
   final bool isAdmin;
   final String? fullName;
   final Future<void> Function() onSignOut;
+  final VoidCallback onTimeline;
+  final Future<void> Function() onReport;
 
   const _TuronNavigationDrawer({
     required this.isAdmin,
     required this.fullName,
     required this.onSignOut,
+    required this.onTimeline,
+    required this.onReport,
   });
 
   @override
   Widget build(BuildContext context) {
     final destinations = <({String label, IconData icon, String? route})>[
       (label: 'Xarita', icon: Icons.map_outlined, route: null),
+      (
+        label: 'Qurilish taymlayni',
+        icon: Icons.history_rounded,
+        route: '__timeline__',
+      ),
+      (
+        label: 'Hisobot (PDF)',
+        icon: Icons.picture_as_pdf_outlined,
+        route: '__report__',
+      ),
       if (isAdmin) ...[
         (
           label: 'Foydalanuvchilar',
@@ -1040,6 +1339,14 @@ class _TuronNavigationDrawer extends StatelessWidget {
         }
         if (item.route == '__logout__') {
           await onSignOut();
+          return;
+        }
+        if (item.route == '__timeline__') {
+          onTimeline();
+          return;
+        }
+        if (item.route == '__report__') {
+          await onReport();
           return;
         }
         if (context.mounted) {

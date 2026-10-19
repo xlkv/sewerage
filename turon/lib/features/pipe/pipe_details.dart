@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../data/models/work_status.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/details_parts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,6 +113,18 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
     }
   }
 
+  Future<void> _changeStatus(WorkStatus status) async {
+    try {
+      await ref.read(pipeRepoProvider).update(widget.pipe.id, status: status);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapErrorToMessage(e))),
+      );
+      rethrow;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = widget.pipe;
@@ -129,6 +142,7 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
           status: p.status,
           icon: Icons.timeline_rounded,
           onClose: widget.onClose,
+          onStatusChange: widget.isAdmin ? _changeStatus : null,
         ),
         const SizedBox(height: 18),
         Row(

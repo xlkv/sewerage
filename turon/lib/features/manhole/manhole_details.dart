@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../data/models/work_status.dart';
+import 'cross_section.dart';
 import '../../shared/widgets/details_parts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,6 +26,9 @@ class ManholeDetails extends ConsumerStatefulWidget {
   final VoidCallback onDeleted;
   final ScrollController? scrollController;
 
+  /// Shows the flow trace (downstream/upstream) of this manhole.
+  final VoidCallback? onTrace;
+
   const ManholeDetails({
     super.key,
     required this.manhole,
@@ -37,6 +42,7 @@ class ManholeDetails extends ConsumerStatefulWidget {
     required this.onSelectPipe,
     required this.onDeleted,
     this.scrollController,
+    this.onTrace,
   });
 
   @override
@@ -86,6 +92,20 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
     }
   }
 
+  Future<void> _changeStatus(WorkStatus status) async {
+    try {
+      await ref
+          .read(manholeRepoProvider)
+          .update(widget.manhole.id, status: status);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapErrorToMessage(e))),
+      );
+      rethrow;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = widget.manhole;
@@ -111,6 +131,7 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
           status: m.status,
           icon: Icons.radio_button_checked_rounded,
           onClose: widget.onClose,
+          onStatusChange: widget.isAdmin ? _changeStatus : null,
         ),
         const SizedBox(height: 16),
         MetricGrid(
@@ -150,6 +171,22 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
               style: const TextStyle(color: AppColors.muted),
             ),
           ),
+        if (widget.onTrace != null) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: widget.onTrace,
+            icon: const Icon(Icons.water_rounded, size: 18),
+            label: const Text('Oqim izini ko\'rsatish'),
+          ),
+        ],
+        const SectionTitle('Ko\'ndalang kesim'),
+        ManholeCrossSection(
+          depthM: m.heightM,
+          diameterM: m.diameterM,
+          status: m.status,
+          incoming: incomingPipes.map(CrossSectionPipe.of).toList(),
+          outgoing: outgoingPipes.map(CrossSectionPipe.of).toList(),
+        ),
         if (m.note != null && m.note!.trim().isNotEmpty) ...[
           const SectionTitle('Izoh'),
           Text(m.note!),
