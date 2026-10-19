@@ -364,7 +364,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       GeoUtils.haversineMeters(minLat, minLng, maxLat, minLng),
       GeoUtils.haversineMeters(minLat, minLng, minLat, maxLng),
     );
-    final widthDp = MediaQuery.sizeOf(context).width * 0.7;
+    // Leave room for the floating top panel/legend and the bottom controls.
+    final widthDp = MediaQuery.sizeOf(context).width * 0.6;
     final metersPerDp = math.max(spanM, 60) / widthDp;
     final zoom = (math.log(
               156543.03392 *
@@ -375,7 +376,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         .clamp(3.0, 18.0);
     _moveCamera(
       ymk.CameraPosition(
-        ymk.Point(latitude: (minLat + maxLat) / 2, longitude: (minLng + maxLng) / 2),
+        ymk.Point(
+          latitude: (minLat + maxLat) / 2 + (maxLat - minLat) * 0.18,
+          longitude: (minLng + maxLng) / 2,
+        ),
         zoom: zoom,
         azimuth: 0,
         tilt: 0,

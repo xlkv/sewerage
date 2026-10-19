@@ -148,9 +148,10 @@ class _CrossSectionPainter extends CustomPainter {
 
     // Pipes (behind shaft walls).
     double pipeHeight(int mm) => (mm / 10).clamp(9.0, 30.0);
-    void drawPipe(CrossSectionPipe p, int index, bool left) {
+    // Returns the top edge of the drawn pipe.
+    double drawPipe(CrossSectionPipe p, double bottom, bool left) {
       final h = pipeHeight(p.diameterMm);
-      final y = bottomY - 4 - h - index * (h + 8);
+      final y = bottom - h;
       final rect = left
           ? Rect.fromLTRB(0, y, shaftLeft, y + h)
           : Rect.fromLTRB(shaftRight, y, size.width, y + h);
@@ -184,29 +185,37 @@ class _CrossSectionPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2,
       );
-      _text(
-        canvas,
-        '${p.code} · Ø${p.diameterMm}',
-        Offset(left ? 8 : size.width - 8, y - 4),
-        align: left ? TextAlign.left : TextAlign.right,
-        anchorBottom: true,
-      );
+      return y;
     }
 
-    for (var i = 0; i < math.min(2, incoming.length); i++) {
-      drawPipe(incoming[i], i, true);
+    // Pipes stack upwards from the shaft bottom; their labels sit under the
+    // shaft bottom (free soil area) so they never touch pipes or ground.
+    void drawSide(List<CrossSectionPipe> list, bool left) {
+      final shown = list.take(2).toList();
+      var bottom = bottomY - 4;
+      for (final p in shown) {
+        bottom = drawPipe(p, bottom, left) - 8;
+      }
+      for (var i = 0; i < shown.length; i++) {
+        _text(
+          canvas,
+          '${shown[i].code} · Ø${shown[i].diameterMm}',
+          Offset(left ? 8 : size.width - 8, bottomY + 6 + i * 13),
+          align: left ? TextAlign.left : TextAlign.right,
+        );
+      }
     }
-    for (var i = 0; i < math.min(2, outgoing.length); i++) {
-      drawPipe(outgoing[i], i, false);
-    }
+
+    drawSide(incoming, true);
+    drawSide(outgoing, false);
     if (incoming.length > 2) {
-      _text(canvas, '+${incoming.length - 2}', Offset(8, bottomY + 14));
+      _text(canvas, '+${incoming.length - 2}', Offset(8, bottomY + 32));
     }
     if (outgoing.length > 2) {
       _text(
         canvas,
         '+${outgoing.length - 2}',
-        Offset(size.width - 8, bottomY + 14),
+        Offset(size.width - 8, bottomY + 32),
         align: TextAlign.right,
       );
     }

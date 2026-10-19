@@ -197,29 +197,24 @@ class TimelinePanel extends ConsumerWidget {
               ),
             ],
           ),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: Text(
-                  date,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 22,
-                    letterSpacing: -0.4,
-                  ),
-                ),
-              ),
-              Text(
-                '${GeoUtils.formatLength(completedMeters)} tugallangan · '
-                '${(pct * 100).round()}%',
-                style: const TextStyle(
-                  color: AppColors.completed,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(width: 8),
-            ],
+          Text(
+            date,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 22,
+              letterSpacing: -0.4,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${GeoUtils.formatLength(completedMeters)} tugallangan · '
+            '${(pct * 100).round()}% tarmoqdan',
+            style: const TextStyle(
+              color: AppColors.completed,
+              fontWeight: FontWeight.w800,
+            ),
           ),
           Row(
             children: [
