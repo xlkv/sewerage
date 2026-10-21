@@ -25,10 +25,7 @@ class ObjectIdDiff {
     required this.toUpdate,
   });
 
-  static ObjectIdDiff compute(
-    Set<String> existingIds,
-    Set<String> nextIds,
-  ) {
+  static ObjectIdDiff compute(Set<String> existingIds, Set<String> nextIds) {
     return ObjectIdDiff(
       toRemove: existingIds.difference(nextIds),
       toAdd: nextIds.difference(existingIds),
@@ -210,15 +207,8 @@ class _ManholeSnapshot {
           other.isDraggable == isDraggable;
 
   @override
-  int get hashCode => Object.hash(
-    lat,
-    lng,
-    status,
-    code,
-    zoomBucket,
-    isSelected,
-    isDraggable,
-  );
+  int get hashCode =>
+      Object.hash(lat, lng, status, code, zoomBucket, isSelected, isDraggable);
 }
 
 class _PipeSnapshot {
@@ -588,10 +578,7 @@ class MapObjectsLayerController {
       if (prevSnapshot == null || prevSnapshot.cacheKey != snapshot.cacheKey) {
         placemark.setIconWithStyle(
           manholeIconProvider(snapshot.cacheKey),
-          ymk.IconStyle(
-            scale: 1.0,
-            zIndex: snapshot.isSelected ? 20.0 : 10.0,
-          ),
+          ymk.IconStyle(scale: 1.0, zIndex: snapshot.isSelected ? 20.0 : 10.0),
         );
       }
       _manholeSnapshots[id] = snapshot;
@@ -818,10 +805,7 @@ class MapObjectsLayerController {
   }
 
   /// Casing (white outline) + status core; planned is dashed; selected glows.
-  void _applyPipeStyle(
-    ymk.PolylineMapObject polyline,
-    _PipeSnapshot snapshot,
-  ) {
+  void _applyPipeStyle(ymk.PolylineMapObject polyline, _PipeSnapshot snapshot) {
     polyline.setStrokeColor(AppColors.forStatus(snapshot.status));
     final planned = snapshot.status == WorkStatus.planned;
     polyline.style = ymk.LineStyle(
@@ -853,10 +837,7 @@ class MapObjectsLayerController {
   void _syncFlows() {
     final wanted = <String>[];
     if (animationsEnabled) {
-      final traced = {
-        ...?_trace?.downstreamPipes,
-        ...?_trace?.upstreamPipes,
-      };
+      final traced = {...?_trace?.downstreamPipes, ...?_trace?.upstreamPipes};
       int rank(MapEntry<String, _PipeSnapshot> e) =>
           (e.value.isSelected ? 2 : 0) + (traced.contains(e.key) ? 1 : 0);
       final candidates =
@@ -1366,7 +1347,8 @@ class MapObjectsLayerController {
       canvas.drawCircle(
         center,
         discRadius,
-        Paint()..color = planned ? statusColor.withValues(alpha: 0.85) : statusColor,
+        Paint()
+          ..color = planned ? statusColor.withValues(alpha: 0.85) : statusColor,
       );
       canvas.drawCircle(
         center,
@@ -1458,10 +1440,7 @@ class MapObjectsLayerController {
     return image;
   }
 
-  static Future<ui.Image> _drawArrowImage(
-    Color color,
-    bool isSelected,
-  ) async {
+  static Future<ui.Image> _drawArrowImage(Color color, bool isSelected) async {
     final dpr =
         (ui.PlatformDispatcher.instance.views.firstOrNull?.devicePixelRatio ??
                 2.75)

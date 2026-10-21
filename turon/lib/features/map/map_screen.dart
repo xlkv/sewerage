@@ -425,38 +425,35 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _timelineFollow = true;
   DateTime _lastFollowMove = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Where construction is happening right now on the timeline: the latest
-  /// status changes (at most 15, within the last ~4% of the replay range),
-  /// so the camera frames one work area at a time.
+  /// The work happening right now on the timeline: the last two pipes that
+  /// went "in progress" (or, before anything started, the next one), so the
+  /// camera can stay close on the crew.
   List<({double lat, double lng})> _activeConstruction(TimelineState t) {
     final events = ref.read(statusEventsProvider).asData?.value ?? const [];
     final manholes = ref.read(manholesProvider).asData?.value ?? const {};
     final pipes = ref.read(pipesProvider).asData?.value ?? const {};
-    final range = t.end.difference(t.start);
-    var window = range * 0.04;
-    if (window < const Duration(days: 1)) window = const Duration(days: 1);
-    final from = t.at.subtract(window);
-    final recent = <(DateTime, ({double lat, double lng}))>[];
-    for (final e in events) {
-      if (e.changedAt.isAfter(t.at)) continue;
-      if (!e.changedAt.isAfter(from) || e.status == null) continue;
-      if (e.objectType == 'manhole') {
-        final m = manholes[e.objectId];
-        if (m != null) recent.add((e.changedAt, (lat: m.lat, lng: m.lng)));
-      } else {
-        final p = pipes[e.objectId];
-        final a = p == null ? null : manholes[p.fromManholeId];
-        final b = p == null ? null : manholes[p.toManholeId];
-        if (a != null && b != null) {
-          recent.add((
-            e.changedAt,
-            (lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2),
-          ));
-        }
-      }
+    ({double lat, double lng})? pointOf(StatusEvent e) {
+      final p = pipes[e.objectId];
+      final a = p == null ? null : manholes[p.fromManholeId];
+      final b = p == null ? null : manholes[p.toManholeId];
+      if (a == null || b == null) return null;
+      return (lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2);
     }
-    recent.sort((x, y) => y.$1.compareTo(x.$1));
-    return [for (final r in recent.take(15)) r.$2];
+
+    final started = events.where(
+      (e) => e.status == WorkStatus.inProgress && e.objectType == 'pipe',
+    );
+    final past = started.where((e) => !e.changedAt.isAfter(t.at)).toList()
+      ..sort((x, y) => y.changedAt.compareTo(x.changedAt));
+    final focus = past.take(2).toList();
+    if (focus.isEmpty) {
+      final future = started.toList()
+        ..sort((x, y) => x.changedAt.compareTo(y.changedAt));
+      if (future.isNotEmpty) focus.add(future.first);
+    }
+    return [
+      for (final e in focus) ?pointOf(e),
+    ];
   }
 
   void _followTimeline(TimelineState? prev, TimelineState? next) {
@@ -479,13 +476,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (!next.playing || !_timelineFollow) return;
     final now = DateTime.now();
     final sinceLast = now.difference(_lastFollowMove);
-    if (!started && sinceLast < const Duration(milliseconds: 1300)) return;
+    if (!started && sinceLast < const Duration(milliseconds: 350)) return;
+    // Close-up on the crew: every pipe and manhole is clearly visible.
     final camera = _cameraFor(
       _activeConstruction(next),
-      shift: -0.3, // keep the work above the bottom timeline panel
-      minZoom: 12.5,
-      maxZoom: 16.5,
-      minSpanM: 250,
+      shift: -0.1, // centre the work between the top card and the panel
+      minZoom: 16.0,
+      maxZoom: 17.3,
+      minSpanM: 70,
     );
     final map = _mapWindow?.map;
     if (camera == null || map == null || !map.isValid()) return;
@@ -503,12 +501,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
     // Only move when the work leaves the view or needs a different zoom.
     if (!started &&
-        shiftM < viewM * 0.3 &&
-        (camera.zoom - current.zoom).abs() < 0.8) {
+        shiftM < viewM * 0.06 &&
+        (camera.zoom - current.zoom).abs() < 0.5) {
       return;
     }
     _lastFollowMove = now;
-    _moveCamera(camera, duration: started ? 1.6 : 1.2);
+    // Short glides along the line; a longer flight to a new area.
+    final far = shiftM > viewM * 1.5;
+    _moveCamera(camera, duration: started || far ? 1.4 : 0.4);
   }
 
   Future<void> _shareReport() async {
@@ -552,8 +552,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
   }
 
-  void _openTimeline() {
-    final events = ref.read(statusEventsProvider).asData?.value ?? const [];
+  Future<void> _openTimeline() async {
+    final events = await ref.refresh(statusEventsProvider.future);
+    if (!mounted) return;
     ref.read(mapControllerProvider.notifier).clearSelection();
     ref.read(traceProvider.notifier).clear();
     ref.read(timelineProvider.notifier).open(events);

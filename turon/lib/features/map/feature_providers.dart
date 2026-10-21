@@ -2,17 +2,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/repositories/auth_repo.dart';
+import '../../data/models/work_status.dart';
 import 'network_graph.dart';
 
-/// Full status history (small: one row per status change).
-final statusEventsProvider = StreamProvider<List<StatusEvent>>((ref) {
+/// Full status history, loaded page by page: the API returns at most 1000
+/// rows per request and the history is a few thousand rows. Re-fetched when
+/// the timeline opens (it is a replay, live updates are not needed).
+final statusEventsProvider = FutureProvider<List<StatusEvent>>((ref) async {
   ref.watch(authSessionProvider);
-  return ref
-      .watch(supabaseProvider)
-      .from('status_events')
-      .stream(primaryKey: ['id'])
-      .order('changed_at')
-      .map((rows) => rows.map(StatusEvent.fromJson).toList());
+  final client = ref.watch(supabaseProvider);
+  const page = 1000;
+  final events = <StatusEvent>[];
+  for (var from = 0; ; from += page) {
+    final rows = await client
+        .from('status_events')
+        .select('object_type, object_id, status, changed_at')
+        .order('changed_at')
+        .order('id')
+        .range(from, from + page - 1);
+    events.addAll(rows.map(StatusEvent.fromJson));
+    if (rows.length < page) break;
+  }
+  return events;
 });
 
 /// Manhole whose flow trace is shown on the map (null = off).
@@ -34,11 +45,19 @@ class TimelineState {
   final DateTime at;
   final bool playing;
 
+  /// Real time the whole range takes at 1x.
+  final Duration playback;
+
+  /// 1, 2 or 4.
+  final int speed;
+
   const TimelineState({
     required this.start,
     required this.end,
     required this.at,
     this.playing = false,
+    this.playback = const Duration(seconds: 30),
+    this.speed = 1,
   });
 
   double get progress {
@@ -47,12 +66,15 @@ class TimelineState {
     return at.difference(start).inMinutes / total;
   }
 
-  TimelineState copyWith({DateTime? at, bool? playing}) => TimelineState(
-    start: start,
-    end: end,
-    at: at ?? this.at,
-    playing: playing ?? this.playing,
-  );
+  TimelineState copyWith({DateTime? at, bool? playing, int? speed}) =>
+      TimelineState(
+        start: start,
+        end: end,
+        at: at ?? this.at,
+        playing: playing ?? this.playing,
+        playback: playback,
+        speed: speed ?? this.speed,
+      );
 }
 
 /// Construction timeline replay (null = live map).
@@ -68,7 +90,25 @@ class TimelineNotifier extends Notifier<TimelineState?> {
               .map((e) => e.changedAt)
               .reduce((a, b) => a.isBefore(b) ? a : b);
     final start = DateTime(first.year, first.month, first.day);
-    state = TimelineState(start: start, end: now, at: start, playing: true);
+    // ~0.35 s per started object so every pipe is seen being built.
+    final started = events
+        .where((e) => e.status == WorkStatus.inProgress)
+        .length;
+    final ms = (started * 350).clamp(20000, 240000);
+    state = TimelineState(
+      start: start,
+      end: now,
+      at: start,
+      playing: true,
+      playback: Duration(milliseconds: ms),
+    );
+  }
+
+  /// 1x → 2x → 4x → 1x.
+  void cycleSpeed() {
+    final s = state;
+    if (s == null) return;
+    state = s.copyWith(speed: s.speed >= 4 ? 1 : s.speed * 2);
   }
 
   void close() => state = null;
@@ -78,7 +118,9 @@ class TimelineNotifier extends Notifier<TimelineState?> {
     if (s == null) return;
     final total = s.end.difference(s.start).inMinutes;
     state = s.copyWith(
-      at: s.start.add(Duration(minutes: (total * progress.clamp(0, 1)).round())),
+      at: s.start.add(
+        Duration(minutes: (total * progress.clamp(0, 1)).round()),
+      ),
     );
   }
 
@@ -92,17 +134,13 @@ class TimelineNotifier extends Notifier<TimelineState?> {
     }
   }
 
-  /// Whole range plays in this time; slow enough for the camera to follow
-  /// the construction from area to area.
-  static const playbackDuration = Duration(seconds: 30);
-
   /// Advances playback.
   void step(Duration dt) {
     final s = state;
     if (s == null || !s.playing) return;
     final total = s.end.difference(s.start);
     final next = s.at.add(
-      total * (dt.inMilliseconds / playbackDuration.inMilliseconds),
+      total * (dt.inMilliseconds * s.speed / s.playback.inMilliseconds),
     );
     if (!next.isBefore(s.end)) {
       state = s.copyWith(at: s.end, playing: false);

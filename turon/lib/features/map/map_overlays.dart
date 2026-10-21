@@ -135,9 +135,7 @@ class _TraceRow extends StatelessWidget {
           ),
         ),
         Text(
-          pipes == 0
-              ? '—'
-              : '$pipes quvur · ${GeoUtils.formatLength(meters)}',
+          pipes == 0 ? '—' : '$pipes quvur · ${GeoUtils.formatLength(meters)}',
           style: const TextStyle(fontWeight: FontWeight.w800),
         ),
         if (trailing != null) ...[
@@ -226,6 +224,15 @@ class TimelinePanel extends ConsumerWidget {
                       ? Icons.pause_rounded
                       : Icons.play_arrow_rounded,
                 ),
+              ),
+              const SizedBox(width: 6),
+              ActionChip(
+                key: const ValueKey('timeline_speed'),
+                label: Text(
+                  '${timeline.speed}x',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                onPressed: notifier.cycleSpeed,
               ),
               Expanded(
                 child: Slider(
@@ -529,7 +536,8 @@ List<SearchResult> searchNetwork(
 ) {
   final q = query.trim().toLowerCase().replaceAll(' ', '');
   if (q.isEmpty) return const [];
-  bool matches(String code) => code.toLowerCase().replaceAll(' ', '').contains(q);
+  bool matches(String code) =>
+      code.toLowerCase().replaceAll(' ', '').contains(q);
   int score(String code) {
     final c = code.toLowerCase();
     if (c == q || c.endsWith('-$q')) return 0;
@@ -590,9 +598,7 @@ class _SearchSheetState extends State<SearchSheet> {
   Widget build(BuildContext context) {
     final results = searchNetwork(_query, widget.manholes, widget.pipes);
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -609,7 +615,9 @@ class _SearchSheetState extends State<SearchSheet> {
                 ),
                 onChanged: (v) => setState(() => _query = v),
                 onSubmitted: (_) {
-                  if (results.isNotEmpty) widget.onSelect(results.first.selection);
+                  if (results.isNotEmpty) {
+                    widget.onSelect(results.first.selection);
+                  }
                 },
               ),
               const SizedBox(height: 8),

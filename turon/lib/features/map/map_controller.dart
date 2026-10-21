@@ -71,8 +71,7 @@ class MapController extends Notifier<MapState> {
     String manholeB,
   ) {
     for (final p in pipes) {
-      final sameDir =
-          p.fromManholeId == manholeA && p.toManholeId == manholeB;
+      final sameDir = p.fromManholeId == manholeA && p.toManholeId == manholeB;
       final reverseDir =
           p.fromManholeId == manholeB && p.toManholeId == manholeA;
       if (sameDir || reverseDir) return true;
@@ -81,11 +80,7 @@ class MapController extends Notifier<MapState> {
   }
 
   void setMode(MapMode mode) {
-    state = state.copyWith(
-      mode: mode,
-      activeForm: null,
-      snackbarMessage: null,
-    );
+    state = state.copyWith(mode: mode, activeForm: null, snackbarMessage: null);
   }
 
   void select(Selection? selection) {
@@ -180,11 +175,7 @@ class MapController extends Notifier<MapState> {
       case MoveManholeMode(:final manholeId):
         // Allow tapping a point on map in MoveManhole mode as well as dragging.
         state = state.copyWith(
-          mode: MoveManholeMode(
-            manholeId: manholeId,
-            newLat: lat,
-            newLng: lng,
-          ),
+          mode: MoveManholeMode(manholeId: manholeId, newLat: lat, newLng: lng),
         );
     }
   }

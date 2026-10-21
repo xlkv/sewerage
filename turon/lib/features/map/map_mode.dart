@@ -194,8 +194,7 @@ class CreatePipeForm extends ActiveForm {
   int get hashCode => Object.hash(CreatePipeForm, fromManholeId, toManholeId);
 
   @override
-  String toString() =>
-      'CreatePipeForm(from: $fromManholeId, to: $toManholeId)';
+  String toString() => 'CreatePipeForm(from: $fromManholeId, to: $toManholeId)';
 }
 
 class EditPipeForm extends ActiveForm {
