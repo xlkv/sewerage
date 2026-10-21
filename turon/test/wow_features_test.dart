@@ -3,6 +3,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:turon/data/models/manhole.dart';
 import 'package:turon/data/models/pipe.dart';
 import 'package:turon/data/models/work_status.dart';
+import 'package:turon/core/geo_utils.dart';
 import 'package:turon/features/map/feature_providers.dart';
 import 'package:turon/features/map/map_mode.dart';
 import 'package:turon/features/map/map_overlays.dart';
@@ -46,6 +47,47 @@ void main() {
 
     test('empty query returns nothing', () {
       expect(searchNetwork('  ', manholes, pipes), isEmpty);
+    });
+  });
+
+  group('curved pipes', () {
+    test('path is read from [[lat, lng], ...] and null means straight', () {
+      final curved = Pipe.fromJson({
+        'id': 'p',
+        'code': 'Q-1',
+        'from_manhole_id': 'a',
+        'to_manhole_id': 'b',
+        'diameter_mm': 200,
+        'path': [
+          [38.1, 65.2],
+          [38.2, 65.3],
+        ],
+      });
+      expect(curved.path, [
+        [38.1, 65.2],
+        [38.2, 65.3],
+      ]);
+      expect(curved.reversedPath.first, [38.2, 65.3]);
+      final straight = Pipe.fromJson({
+        'id': 'p',
+        'code': 'Q-1',
+        'from_manhole_id': 'a',
+        'to_manhole_id': 'b',
+        'diameter_mm': 200,
+        'path': null,
+      });
+      expect(straight.isCurved, isFalse);
+    });
+
+    test('alongPolyline finds the middle of an L-shaped line', () {
+      // Two equal legs: east then north; middle is the corner.
+      final mid = GeoUtils.alongPolyline([
+        (lat: 0.0, lng: 0.0),
+        (lat: 0.0, lng: 0.01),
+        (lat: 0.01, lng: 0.01),
+      ], 0.5);
+      expect(mid.lat, closeTo(0.0, 1e-4));
+      expect(mid.lng, closeTo(0.01, 1e-4));
     });
   });
 

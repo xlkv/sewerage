@@ -87,6 +87,7 @@ class PipeRepository {
     WorkStatus? status,
     String? note,
     bool clearNote = false,
+    List<List<double>>? path,
   }) async {
     // Never send length_auto_m on update (revoked at column level per LLD 1.3)
     final payload = <String, dynamic>{
@@ -109,6 +110,9 @@ class PipeRepository {
       payload['note'] = null;
     } else if (note != null) {
       payload['note'] = note.trim();
+    }
+    if (path != null) {
+      payload['path'] = path.isEmpty ? null : path;
     }
 
     final row = await _client

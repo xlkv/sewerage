@@ -19,6 +19,7 @@ _Pipe _$PipeFromJson(Map<String, dynamic> json) => _Pipe(
   status:
       $enumDecodeNullable(_$WorkStatusEnumMap, json['status']) ??
       WorkStatus.planned,
+  path: json['path'] == null ? const [] : _pathFromJson(json['path']),
   note: json['note'] as String?,
   createdBy: json['created_by'] as String?,
   createdAt: json['created_at'] == null
@@ -38,6 +39,7 @@ Map<String, dynamic> _$PipeToJson(_Pipe instance) => <String, dynamic>{
   'length_auto_m': instance.lengthAutoM,
   'length_manual_m': instance.lengthManualM,
   'status': _$WorkStatusEnumMap[instance.status]!,
+  'path': _pathToJson(instance.path),
   'note': instance.note,
   'created_by': instance.createdBy,
   'created_at': instance.createdAt?.toIso8601String(),

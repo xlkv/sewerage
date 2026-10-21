@@ -156,7 +156,12 @@ class MapObjectsLayer {
         final from = allManholes[p.fromManholeId];
         final to = allManholes[p.toManholeId];
         if (from == null || to == null) return null;
-        return GeoUtils.midpoint(from.lat, from.lng, to.lat, to.lng);
+        final mid = GeoUtils.alongPolyline([
+          (lat: from.lat, lng: from.lng),
+          for (final b in p.path) (lat: b[0], lng: b[1]),
+          (lat: to.lat, lng: to.lng),
+        ], 0.5);
+        return (lat: mid.lat, lng: mid.lng);
     }
   }
 }
@@ -222,6 +227,9 @@ class _PipeSnapshot {
   final bool isSelected;
   final double widthDp;
 
+  /// Interior bend points [[lat, lng], ...] (curved pipes from KML).
+  final List<List<double>> bends;
+
   const _PipeSnapshot({
     required this.fromLat,
     required this.fromLng,
@@ -230,7 +238,60 @@ class _PipeSnapshot {
     required this.status,
     required this.isSelected,
     required this.widthDp,
+    this.bends = const [],
   });
+
+  String get _bendsKey => bends.map((b) => '${b[0]},${b[1]}').join(';');
+
+  /// from → bends → to.
+  List<({double lat, double lng})> get coords => [
+    (lat: fromLat, lng: fromLng),
+    for (final b in bends) (lat: b[0], lng: b[1]),
+    (lat: toLat, lng: toLng),
+  ];
+
+  ymk.Polyline get polyline => ymk.Polyline([
+    for (final c in coords) ymk.Point(latitude: c.lat, longitude: c.lng),
+  ]);
+
+  /// Point halfway along the pipe and the flow bearing there.
+  ({double lat, double lng, double bearing}) get middle =>
+      GeoUtils.alongPolyline(coords, 0.5);
+
+  /// The first [fraction] of the pipe (draw-on animation).
+  ymk.Polyline partial(double fraction) {
+    final pts = coords;
+    final lengths = <double>[];
+    var total = 0.0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      final d = GeoUtils.haversineMeters(
+        pts[i].lat,
+        pts[i].lng,
+        pts[i + 1].lat,
+        pts[i + 1].lng,
+      );
+      lengths.add(d);
+      total += d;
+    }
+    final target = total * fraction.clamp(0.0, 1.0);
+    final out = [ymk.Point(latitude: pts[0].lat, longitude: pts[0].lng)];
+    var acc = 0.0;
+    for (var i = 0; i < lengths.length; i++) {
+      if (acc + lengths[i] >= target) {
+        final t = lengths[i] == 0 ? 0.0 : (target - acc) / lengths[i];
+        out.add(
+          ymk.Point(
+            latitude: pts[i].lat + (pts[i + 1].lat - pts[i].lat) * t,
+            longitude: pts[i].lng + (pts[i + 1].lng - pts[i].lng) * t,
+          ),
+        );
+        return ymk.Polyline(out);
+      }
+      acc += lengths[i];
+      out.add(ymk.Point(latitude: pts[i + 1].lat, longitude: pts[i + 1].lng));
+    }
+    return ymk.Polyline(out);
+  }
 
   String diffKey(String id) =>
       '$id|${status.name}|${isSelected ? 'sel' : 'norm'}|$widthDp';
@@ -245,7 +306,8 @@ class _PipeSnapshot {
           other.toLng == toLng &&
           other.status == status &&
           other.isSelected == isSelected &&
-          other.widthDp == widthDp;
+          other.widthDp == widthDp &&
+          other._bendsKey == _bendsKey;
 
   @override
   int get hashCode => Object.hash(
@@ -256,6 +318,7 @@ class _PipeSnapshot {
     status,
     isSelected,
     widthDp,
+    _bendsKey,
   );
 }
 
@@ -613,6 +676,7 @@ class MapObjectsLayerController {
         status: pipe.status,
         isSelected: isSelected,
         widthDp: MapObjectsLayer.pipeWidthForDiameter(pipe.diameterMm),
+        bends: pipe.path,
       );
     }
 
@@ -668,25 +732,12 @@ class MapObjectsLayerController {
           prevSnapshot.fromLat != snapshot.fromLat ||
           prevSnapshot.fromLng != snapshot.fromLng ||
           prevSnapshot.toLat != snapshot.toLat ||
-          prevSnapshot.toLng != snapshot.toLng) {
-        polyline.geometry = ymk.Polyline([
-          ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
-          ymk.Point(latitude: snapshot.toLat, longitude: snapshot.toLng),
-        ]);
-        final mid = GeoUtils.midpoint(
-          snapshot.fromLat,
-          snapshot.fromLng,
-          snapshot.toLat,
-          snapshot.toLng,
-        );
-        final bearing = GeoUtils.bearingDegrees(
-          snapshot.fromLat,
-          snapshot.fromLng,
-          snapshot.toLat,
-          snapshot.toLng,
-        );
+          prevSnapshot.toLng != snapshot.toLng ||
+          prevSnapshot._bendsKey != snapshot._bendsKey) {
+        polyline.geometry = snapshot.polyline;
+        final mid = snapshot.middle;
         arrow.geometry = ymk.Point(latitude: mid.lat, longitude: mid.lng);
-        arrow.direction = bearing;
+        arrow.direction = mid.bearing;
       }
       _pipeSnapshots[id] = snapshot;
     }
@@ -696,13 +747,8 @@ class MapObjectsLayerController {
       final snapshot = nextSnapshots[id];
       if (snapshot == null) continue;
 
-      final geometryPoints = [
-        ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
-        ymk.Point(latitude: snapshot.toLat, longitude: snapshot.toLng),
-      ];
-
       final polyline = _pipesCollection.addPolylineWithGeometry(
-        ymk.Polyline(geometryPoints),
+        snapshot.polyline,
       );
       _pipePolylines[id] = polyline;
 
@@ -714,24 +760,11 @@ class MapObjectsLayerController {
       final isNewPipe = _initialSyncDone && !_knownPipeIds.contains(id);
       if (isNewPipe && animationsEnabled) {
         _drawOnStartMs[id] = _clock.elapsedMilliseconds;
-        polyline.geometry = ymk.Polyline([
-          geometryPoints.first,
-          geometryPoints.first,
-        ]);
+        polyline.geometry = snapshot.partial(0);
       }
 
-      final mid = GeoUtils.midpoint(
-        snapshot.fromLat,
-        snapshot.fromLng,
-        snapshot.toLat,
-        snapshot.toLng,
-      );
-      final bearing = GeoUtils.bearingDegrees(
-        snapshot.fromLat,
-        snapshot.fromLng,
-        snapshot.toLat,
-        snapshot.toLng,
-      );
+      final mid = snapshot.middle;
+      final bearing = mid.bearing;
 
       final arrow = _arrowsCollection.addPlacemark();
       _pipeArrows[id] = arrow;
@@ -829,10 +862,7 @@ class MapObjectsLayerController {
 
     for (final id in wanted) {
       final snapshot = _pipeSnapshots[id]!;
-      final geometry = ymk.Polyline([
-        ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
-        ymk.Point(latitude: snapshot.toLat, longitude: snapshot.toLng),
-      ]);
+      final geometry = snapshot.polyline;
       var flow = _flowPolylines[id];
       if (flow == null || !flow.isValid()) {
         flow = _flowCollection.addPolylineWithGeometry(geometry);
@@ -907,13 +937,11 @@ class MapObjectsLayerController {
       if (snapshot == null) continue;
       final key =
           '${entry.value.toARGB32()}|${snapshot.fromLat},${snapshot.fromLng},'
-          '${snapshot.toLat},${snapshot.toLng}|${snapshot.widthDp}';
+          '${snapshot.toLat},${snapshot.toLng}|${snapshot.widthDp}|'
+          '${snapshot._bendsKey}';
       if (_traceKeys[entry.key] == key) continue;
       var line = _traceLines[entry.key];
-      final geometry = ymk.Polyline([
-        ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
-        ymk.Point(latitude: snapshot.toLat, longitude: snapshot.toLng),
-      ]);
+      final geometry = snapshot.polyline;
       if (line == null || !line.isValid()) {
         line = _traceCollection.addPolylineWithGeometry(geometry);
         _traceLines[entry.key] = line;
@@ -945,12 +973,7 @@ class MapObjectsLayerController {
     }
     for (final entry in wanted.entries) {
       final snapshot = _pipeSnapshots[entry.key]!;
-      final mid = GeoUtils.midpoint(
-        snapshot.fromLat,
-        snapshot.fromLng,
-        snapshot.toLat,
-        snapshot.toLng,
-      );
+      final mid = snapshot.middle;
       var label = _pipeLabels[entry.key];
       if (label == null || !label.isValid()) {
         label = _labelsCollection.addPlacemark();
@@ -1121,14 +1144,7 @@ class MapObjectsLayerController {
         continue;
       }
       final k = Curves.easeOutCubic.transform(t.clamp(0.0, 1.0));
-      polyline.geometry = ymk.Polyline([
-        ymk.Point(latitude: snapshot.fromLat, longitude: snapshot.fromLng),
-        ymk.Point(
-          latitude: snapshot.fromLat + (snapshot.toLat - snapshot.fromLat) * k,
-          longitude:
-              snapshot.fromLng + (snapshot.toLng - snapshot.fromLng) * k,
-        ),
-      ]);
+      polyline.geometry = snapshot.partial(k);
       if (t >= 1.0) {
         _drawOnStartMs.remove(id);
         final arrow = _pipeArrows[id];

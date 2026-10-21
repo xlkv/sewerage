@@ -326,19 +326,42 @@ class NetworkReport {
                 final a = manholes[p.fromManholeId];
                 final b = manholes[p.toManholeId];
                 if (a == null || b == null) continue;
-                final pa = project(a.lat, a.lng);
-                final pb = project(b.lat, b.lng);
+                final pts = [
+                  project(a.lat, a.lng),
+                  for (final v in p.path) project(v[0], v[1]),
+                  project(b.lat, b.lng),
+                ];
                 canvas
                   ..setStrokeColor(_status(p.status))
                   ..setLineWidth(p.diameterMm >= 315 ? 3 : 2)
-                  ..moveTo(pa.x, pa.y)
-                  ..lineTo(pb.x, pb.y)
-                  ..strokePath();
-                // Small arrowhead at 60% along the pipe.
-                final t = 0.6;
-                final mx = pa.x + (pb.x - pa.x) * t;
-                final my = pa.y + (pb.y - pa.y) * t;
-                final ang = math.atan2(pb.y - pa.y, pb.x - pa.x);
+                  ..moveTo(pts.first.x, pts.first.y);
+                for (final q in pts.skip(1)) {
+                  canvas.lineTo(q.x, q.y);
+                }
+                canvas.strokePath();
+                // Small arrowhead at 60% of the pipe's drawn length.
+                var total = 0.0;
+                for (var i = 0; i < pts.length - 1; i++) {
+                  total += math.sqrt(
+                    math.pow(pts[i + 1].x - pts[i].x, 2) +
+                        math.pow(pts[i + 1].y - pts[i].y, 2),
+                  );
+                }
+                var mx = pts.first.x, my = pts.first.y, ang = 0.0;
+                var acc = 0.0;
+                for (var i = 0; i < pts.length - 1; i++) {
+                  final dx = pts[i + 1].x - pts[i].x;
+                  final dy = pts[i + 1].y - pts[i].y;
+                  final seg = math.sqrt(dx * dx + dy * dy);
+                  if (acc + seg >= total * 0.6 || i == pts.length - 2) {
+                    final t = seg == 0 ? 0.0 : (total * 0.6 - acc) / seg;
+                    mx = pts[i].x + dx * t;
+                    my = pts[i].y + dy * t;
+                    ang = math.atan2(dy, dx);
+                    break;
+                  }
+                  acc += seg;
+                }
                 const len = 6.0;
                 canvas
                   ..setFillColor(_status(p.status))

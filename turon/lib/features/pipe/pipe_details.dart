@@ -47,6 +47,7 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
         widget.pipe.id,
         fromManholeId: widget.pipe.toManholeId,
         toManholeId: widget.pipe.fromManholeId,
+        path: widget.pipe.reversedPath,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
