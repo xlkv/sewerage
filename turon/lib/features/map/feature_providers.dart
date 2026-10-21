@@ -92,12 +92,18 @@ class TimelineNotifier extends Notifier<TimelineState?> {
     }
   }
 
-  /// Advances playback; the whole range plays in ~8 seconds.
+  /// Whole range plays in this time; slow enough for the camera to follow
+  /// the construction from area to area.
+  static const playbackDuration = Duration(seconds: 30);
+
+  /// Advances playback.
   void step(Duration dt) {
     final s = state;
     if (s == null || !s.playing) return;
     final total = s.end.difference(s.start);
-    final next = s.at.add(total * (dt.inMilliseconds / 8000));
+    final next = s.at.add(
+      total * (dt.inMilliseconds / playbackDuration.inMilliseconds),
+    );
     if (!next.isBefore(s.end)) {
       state = s.copyWith(at: s.end, playing: false);
     } else {

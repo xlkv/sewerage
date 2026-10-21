@@ -51,7 +51,11 @@ class _MapInputListenerImpl implements ymk.MapInputListener {
 }
 
 class _MapCameraListenerImpl implements ymk.MapCameraListener {
-  final void Function(ymk.CameraPosition position) onCameraChanged;
+  final void Function(
+    ymk.CameraPosition position,
+    ymk.CameraUpdateReason reason,
+  )
+  onCameraChanged;
 
   _MapCameraListenerImpl({required this.onCameraChanged});
 
@@ -62,7 +66,7 @@ class _MapCameraListenerImpl implements ymk.MapCameraListener {
     ymk.CameraUpdateReason cameraUpdateReason,
     bool finished,
   ) {
-    onCameraChanged(cameraPosition);
+    onCameraChanged(cameraPosition, cameraUpdateReason);
   }
 }
 
@@ -187,7 +191,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     map.addInputListener(_inputListener!);
 
     _cameraListener = _MapCameraListenerImpl(
-      onCameraChanged: (position) {
+      onCameraChanged: (position, reason) {
+        // A user drag during replay hands the camera back to the user.
+        if (reason == ymk.CameraUpdateReason.Gestures &&
+            (ref.read(timelineProvider)?.playing ?? false)) {
+          _timelineFollow = false;
+        }
         final zoom = position.zoom;
         final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
         final nextBucket = MapObjectsLayer.zoomBucket(zoom);
@@ -360,9 +369,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  void _fitTo(Iterable<({double lat, double lng})> points) {
+  /// Camera framing [points] in ~60% of the screen width.
+  /// [shift] moves the target by a fraction of the box height (positive =
+  /// north, so the objects sit lower on screen).
+  ymk.CameraPosition? _cameraFor(
+    Iterable<({double lat, double lng})> points, {
+    double shift = 0.18,
+    double minZoom = 3,
+    double maxZoom = 18,
+    double minSpanM = 60,
+  }) {
     final list = points.toList();
-    if (list.isEmpty) return;
+    if (list.isEmpty) return null;
     var minLat = list.first.lat, maxLat = list.first.lat;
     var minLng = list.first.lng, maxLng = list.first.lng;
     for (final p in list) {
@@ -377,25 +395,120 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
     // Leave room for the floating top panel/legend and the bottom controls.
     final widthDp = MediaQuery.sizeOf(context).width * 0.6;
-    final metersPerDp = math.max(spanM, 60) / widthDp;
-    final zoom = (math.log(
-              156543.03392 *
-                  math.cos((minLat + maxLat) / 2 * math.pi / 180) /
-                  metersPerDp,
-            ) /
-            math.ln2)
-        .clamp(3.0, 18.0);
-    _moveCamera(
-      ymk.CameraPosition(
-        ymk.Point(
-          latitude: (minLat + maxLat) / 2 + (maxLat - minLat) * 0.18,
-          longitude: (minLng + maxLng) / 2,
-        ),
-        zoom: zoom,
-        azimuth: 0,
-        tilt: 0,
+    final metersPerDp = math.max(spanM, minSpanM) / widthDp;
+    final zoom =
+        (math.log(
+                  156543.03392 *
+                      math.cos((minLat + maxLat) / 2 * math.pi / 180) /
+                      metersPerDp,
+                ) /
+                math.ln2)
+            .clamp(minZoom, maxZoom);
+    final latSpan = math.max(maxLat - minLat, 0.002);
+    return ymk.CameraPosition(
+      ymk.Point(
+        latitude: (minLat + maxLat) / 2 + latSpan * shift,
+        longitude: (minLng + maxLng) / 2,
       ),
+      zoom: zoom,
+      azimuth: 0,
+      tilt: 0,
     );
+  }
+
+  void _fitTo(Iterable<({double lat, double lng})> points) {
+    final camera = _cameraFor(points);
+    if (camera != null) _moveCamera(camera);
+  }
+
+  // ── Cinematic timeline camera ──────────────────────────────────────────
+  bool _timelineFollow = true;
+  DateTime _lastFollowMove = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Where construction is happening right now on the timeline: the latest
+  /// status changes (at most 15, within the last ~4% of the replay range),
+  /// so the camera frames one work area at a time.
+  List<({double lat, double lng})> _activeConstruction(TimelineState t) {
+    final events = ref.read(statusEventsProvider).asData?.value ?? const [];
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final range = t.end.difference(t.start);
+    var window = range * 0.04;
+    if (window < const Duration(days: 1)) window = const Duration(days: 1);
+    final from = t.at.subtract(window);
+    final recent = <(DateTime, ({double lat, double lng}))>[];
+    for (final e in events) {
+      if (e.changedAt.isAfter(t.at)) continue;
+      if (!e.changedAt.isAfter(from) || e.status == null) continue;
+      if (e.objectType == 'manhole') {
+        final m = manholes[e.objectId];
+        if (m != null) recent.add((e.changedAt, (lat: m.lat, lng: m.lng)));
+      } else {
+        final p = pipes[e.objectId];
+        final a = p == null ? null : manholes[p.fromManholeId];
+        final b = p == null ? null : manholes[p.toManholeId];
+        if (a != null && b != null) {
+          recent.add((
+            e.changedAt,
+            (lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2),
+          ));
+        }
+      }
+    }
+    recent.sort((x, y) => y.$1.compareTo(x.$1));
+    return [for (final r in recent.take(15)) r.$2];
+  }
+
+  void _followTimeline(TimelineState? prev, TimelineState? next) {
+    if (next == null) return;
+    final started = next.playing && (prev == null || !prev.playing);
+    if (started) {
+      _timelineFollow = true;
+      _lastFollowMove = DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    // Finale: zoom out to the whole network.
+    if (next.progress >= 1 && (prev?.progress ?? 0) < 1) {
+      final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+      final camera = _cameraFor(
+        manholes.values.map((m) => (lat: m.lat, lng: m.lng)),
+        shift: -0.22,
+      );
+      if (camera != null) _moveCamera(camera, duration: 1.8);
+      return;
+    }
+    if (!next.playing || !_timelineFollow) return;
+    final now = DateTime.now();
+    final sinceLast = now.difference(_lastFollowMove);
+    if (!started && sinceLast < const Duration(milliseconds: 1300)) return;
+    final camera = _cameraFor(
+      _activeConstruction(next),
+      shift: -0.3, // keep the work above the bottom timeline panel
+      minZoom: 12.5,
+      maxZoom: 16.5,
+      minSpanM: 250,
+    );
+    final map = _mapWindow?.map;
+    if (camera == null || map == null || !map.isValid()) return;
+    final current = map.cameraPosition;
+    final metersPerDp =
+        156543.03392 *
+        math.cos(current.target.latitude * math.pi / 180) /
+        math.pow(2, current.zoom);
+    final viewM = MediaQuery.sizeOf(context).width * metersPerDp;
+    final shiftM = GeoUtils.haversineMeters(
+      current.target.latitude,
+      current.target.longitude,
+      camera.target.latitude,
+      camera.target.longitude,
+    );
+    // Only move when the work leaves the view or needs a different zoom.
+    if (!started &&
+        shiftM < viewM * 0.3 &&
+        (camera.zoom - current.zoom).abs() < 0.8) {
+      return;
+    }
+    _lastFollowMove = now;
+    _moveCamera(camera, duration: started ? 1.6 : 1.2);
   }
 
   Future<void> _shareReport() async {
@@ -480,9 +593,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           builder.setTileUrlProvider(_satelliteUrlProvider);
           builder.setProjection(ymk.Projections.wgs84Mercator);
           builder.setTileFormat(ymk.TileFormat.Jpg);
-          builder.setZoomRanges(const [
-            ymk.ZoomRangeIdl(zMin: 0, zMax: 20),
-          ]);
+          builder.setZoomRanges(const [ymk.ZoomRangeIdl(zMin: 0, zMax: 20)]);
         },
       );
       _satelliteLayer = map.addTileLayer(
@@ -553,7 +664,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
   }
 
-  void _moveCamera(ymk.CameraPosition position, {bool animated = true}) {
+  void _moveCamera(
+    ymk.CameraPosition position, {
+    bool animated = true,
+    double duration = 0.4,
+  }) {
     final map = _mapWindow?.map;
     if (map == null || !map.isValid()) return;
     final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
@@ -561,9 +676,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (animated) {
       map.move(
         position,
-        animation: const ymk.Animation(
+        animation: ymk.Animation(
           type: ymk.AnimationType.Smooth,
-          duration: 0.4,
+          duration: duration,
         ),
       );
     } else {
@@ -574,7 +689,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _syncMapObjects();
     }
   }
-
 
   Future<void> _applyInitialCamera(Map<String, Manhole> manholes) async {
     final map = _mapWindow?.map;
@@ -759,29 +873,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     try {
       final moved = await ref
           .read(manholeRepoProvider)
-          .move(
-            mode.manholeId,
-            lat: mode.newLat,
-            lng: mode.newLng,
-          );
+          .move(mode.manholeId, lat: mode.newLat, lng: mode.newLng);
       final currentManholes =
           ref.read(manholesProvider).asData?.value ?? const {};
-      ref
-          .read(pipeRepoProvider)
-          .recalculateForMovedManhole(
-            moved,
-            {...currentManholes, moved.id: moved},
-          );
+      ref.read(pipeRepoProvider).recalculateForMovedManhole(moved, {
+        ...currentManholes,
+        moved.id: moved,
+      });
       if (!mounted) return;
       ref.read(mapControllerProvider.notifier).completeMoveManhole();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kolodets joyi saqlandi')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Kolodets joyi saqlandi')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mapErrorToMessage(e))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(mapErrorToMessage(e))));
     } finally {
       if (mounted) {
         setState(() => _savingMove = false);
@@ -927,12 +1035,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final t = NetworkGraph.trace(next, pipes.values);
       _fitTo([
         for (final id in {next, ...t.downstreamManholes, ...t.upstreamManholes})
-          if (manholes[id] != null) (lat: manholes[id]!.lat, lng: manholes[id]!.lng),
+          if (manholes[id] != null)
+            (lat: manholes[id]!.lat, lng: manholes[id]!.lng),
       ]);
     });
 
     ref.listen<TimelineState?>(timelineProvider, (prev, next) {
       _updateTimelineLoop(next);
+      _followTimeline(prev, next);
       // During playback the date moves every 50 ms; redrawing ~1000 map
       // objects that often blocks the UI, so sync at most every 150 ms.
       if (next != null && next.playing && prev != null) {
@@ -950,9 +1060,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
     ref.listen<MapState>(mapControllerProvider, (prev, next) {
       if (next.snackbarMessage != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(next.snackbarMessage!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(next.snackbarMessage!)));
         ref.read(mapControllerProvider.notifier).clearSnackbar();
       }
       _syncMapObjects();
@@ -1011,13 +1121,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final detailsBuilder = timeline != null
         ? null
         : _buildDetailsBuilder(
-      selection: mapState.selection,
-      mode: mapState.mode,
-      manholes: allManholes,
-      pipes: allPipes,
-      masters: allMasters,
-      isAdmin: isAdmin,
-    );
+            selection: mapState.selection,
+            mode: mapState.mode,
+            manholes: allManholes,
+            pipes: allPipes,
+            masters: allMasters,
+            isAdmin: isAdmin,
+          );
 
     final canPopDirectly =
         mapState.mode is ViewMode &&
@@ -1179,9 +1289,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                   ),
                                   pipes: allPipes,
                                   manholes: allManholes,
-                                  onClose: () => ref
-                                      .read(traceProvider.notifier)
-                                      .clear(),
+                                  onClose: () =>
+                                      ref.read(traceProvider.notifier).clear(),
                                 )
                               : NetworkStatsCard(
                                   key: const ValueKey('stats'),
@@ -1384,17 +1493,17 @@ class _TuronNavigationDrawer extends StatelessWidget {
             children: [
               Text(
                 'Turon — Kanalizatsiya GIS',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               if (fullName != null && fullName!.trim().isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
                   fullName!,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.grey.shade700,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey.shade700),
                 ),
               ],
             ],
