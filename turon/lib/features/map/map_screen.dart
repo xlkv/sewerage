@@ -142,6 +142,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   void dispose() {
     _animationTimer?.cancel();
     _timelineTimer?.cancel();
+    _timelineSyncTimer?.cancel();
     _rubberInfo.dispose();
     _lifecycleListener?.dispose();
     final map = _mapWindow?.map;
@@ -332,6 +333,16 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       snappedId: snap?.id,
       snappedCode: snap?.code,
     );
+  }
+
+  Timer? _timelineSyncTimer;
+
+  void _scheduleTimelineSync() {
+    if (_timelineSyncTimer != null) return;
+    _timelineSyncTimer = Timer(const Duration(milliseconds: 150), () {
+      _timelineSyncTimer = null;
+      if (mounted) _syncMapObjects();
+    });
   }
 
   void _updateTimelineLoop(TimelineState? timeline) {
@@ -922,7 +933,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
     ref.listen<TimelineState?>(timelineProvider, (prev, next) {
       _updateTimelineLoop(next);
-      _syncMapObjects();
+      // During playback the date moves every 50 ms; redrawing ~1000 map
+      // objects that often blocks the UI, so sync at most every 150 ms.
+      if (next != null && next.playing && prev != null) {
+        _scheduleTimelineSync();
+      } else {
+        _timelineSyncTimer?.cancel();
+        _timelineSyncTimer = null;
+        _syncMapObjects();
+      }
     });
 
     ref.listen(statusEventsProvider, (_, _) {

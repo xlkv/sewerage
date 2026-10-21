@@ -483,14 +483,13 @@ void main() {
         syncFromState();
         expect(
           manholesCollection.removedPlacemarks,
-          contains(selectedPlacemarkA),
-          reason:
-              'Selected placemark must be removed when selection clears on empty map tap',
+          isEmpty,
+          reason: 'Selection changes update the marker in place',
         );
         expect(manholesCollection.activePlacemarks.length, 1);
         final restoredPlacemarkA = manholesCollection.activePlacemarks.single;
         expect(restoredPlacemarkA.lastIconProvider?.id, contains('norm'));
-        expect(restoredPlacemarkA.lastIconProvider?.cacheable, isFalse);
+        expect(restoredPlacemarkA.lastIconProvider?.cacheable, isTrue);
         expect(restoredPlacemarkA.lastIconStyle?.zIndex, 10.0);
 
         // (b) Select manhole -> clear via bottom sheet X button (clearSelection)
@@ -504,9 +503,8 @@ void main() {
         syncFromState();
         expect(
           manholesCollection.removedPlacemarks,
-          contains(selectedPlacemarkB),
-          reason:
-              'Selected placemark must be removed when selection clears via X button',
+          isEmpty,
+          reason: 'Selection changes update the marker in place',
         );
         expect(
           manholesCollection.activePlacemarks.single.lastIconProvider?.id,
@@ -524,9 +522,8 @@ void main() {
         syncFromState();
         expect(
           manholesCollection.removedPlacemarks,
-          contains(selectedPlacemarkC),
-          reason:
-              'Selected placemark must be removed when selection clears via sheet swipe down',
+          isEmpty,
+          reason: 'Selection changes update the marker in place',
         );
         expect(
           manholesCollection.activePlacemarks.single.lastIconProvider?.id,

@@ -187,12 +187,15 @@ class _ManholeSnapshot {
 
   ManholeMarkerCacheKey get cacheKey => ManholeMarkerCacheKey(
     status: status,
-    code: code,
+    // Dots carry no label, so all dots of a status share one bitmap.
+    code: zoomBucket == 'dot' ? '' : code,
     selected: isSelected,
     zoomBucket: zoomBucket,
   );
 
-  String diffKey(String id) => '$id|${cacheKey.id}';
+  // Identity only: look changes (status, selection, zoom) are applied in
+  // place by the update pass instead of removing and re-adding the object.
+  String diffKey(String id) => id;
 
   @override
   bool operator ==(Object other) =>
@@ -293,8 +296,7 @@ class _PipeSnapshot {
     return ymk.Polyline(out);
   }
 
-  String diffKey(String id) =>
-      '$id|${status.name}|${isSelected ? 'sel' : 'norm'}|$widthDp';
+  String diffKey(String id) => id;
 
   @override
   bool operator ==(Object other) =>
@@ -618,7 +620,11 @@ class MapObjectsLayerController {
         longitude: snapshot.lng,
       );
       final isNew = _initialSyncDone && !_knownManholeIds.contains(id);
-      final dropIn = isNew && animationsEnabled;
+      // Cap concurrent drop-ins (timeline replay can add hundreds at once).
+      final dropIn =
+          isNew &&
+          animationsEnabled &&
+          _dropInStartMs.length < MapObjectsLayer.maxAnimatedObjects;
       placemark.setIconWithStyle(
         manholeIconProvider(snapshot.cacheKey),
         ymk.IconStyle(
@@ -734,10 +740,26 @@ class MapObjectsLayerController {
           prevSnapshot.toLat != snapshot.toLat ||
           prevSnapshot.toLng != snapshot.toLng ||
           prevSnapshot._bendsKey != snapshot._bendsKey) {
-        polyline.geometry = snapshot.polyline;
+        if (!_drawOnStartMs.containsKey(id)) {
+          polyline.geometry = snapshot.polyline;
+        }
         final mid = snapshot.middle;
         arrow.geometry = ymk.Point(latitude: mid.lat, longitude: mid.lng);
         arrow.direction = mid.bearing;
+      }
+      if (prevSnapshot == null ||
+          prevSnapshot.status != snapshot.status ||
+          prevSnapshot.isSelected != snapshot.isSelected ||
+          prevSnapshot.widthDp != snapshot.widthDp) {
+        _applyPipeStyle(polyline, snapshot);
+        arrow.setIconWithStyle(
+          _arrowIconProvider(snapshot.status, snapshot.isSelected),
+          ymk.IconStyle(
+            rotationType: ymk.RotationType.Rotate,
+            zIndex: snapshot.isSelected ? 8.0 : 3.0,
+            flat: true,
+          ),
+        );
       }
       _pipeSnapshots[id] = snapshot;
     }
@@ -758,7 +780,9 @@ class MapObjectsLayerController {
 
       _applyPipeStyle(polyline, snapshot);
       final isNewPipe = _initialSyncDone && !_knownPipeIds.contains(id);
-      if (isNewPipe && animationsEnabled) {
+      if (isNewPipe &&
+          animationsEnabled &&
+          _drawOnStartMs.length < MapObjectsLayer.maxAnimatedObjects) {
         _drawOnStartMs[id] = _clock.elapsedMilliseconds;
         polyline.geometry = snapshot.partial(0);
       }
@@ -1209,7 +1233,7 @@ class MapObjectsLayerController {
       key,
       () => ymk_image.ImageProvider(
         () => drawManholeImage(key),
-        cacheable: false,
+        cacheable: true,
         id: key.id,
       ),
     );
