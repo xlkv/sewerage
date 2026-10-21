@@ -1,4 +1,4 @@
-"""KML (Yandex Map Constructor) -> Turon network rows.
+"""KML / GeoJSON (Yandex Map Constructor) -> Turon network rows.
 
 Points become manholes (names kept exactly, duplicates allowed). Each
 LineString becomes a chain of pipes between the manholes lying on it
@@ -10,7 +10,7 @@ created. Flow direction = drawing direction of the line.
 A construction schedule is simulated (downstream first) so the timeline
 replay has history. Output: compact JSON for the SQL import.
 
-usage: python3 -I kml_import.py file.kml out.json [--days-back 90]
+usage: python3 -I kml_import.py file.kml|file.geojson out.json [--days-back 90]
 """
 import json
 import math
@@ -33,6 +33,8 @@ def hav(a, b):
 
 
 def parse(path):
+    if path.endswith((".geojson", ".json")):
+        return parse_geojson(path)
     root = ET.parse(path).getroot()
     points, lines = [], []
     for pm in root.iter(NS + "Placemark"):
@@ -49,6 +51,27 @@ def parse(path):
                 lines.append(cs)
         elif pt is not None:
             lng, lat = map(float, pt.text.strip().split(",")[:2])
+            points.append({"name": name, "lat": lat, "lng": lng})
+    return points, lines
+
+
+def parse_geojson(path):
+    """GeoJSON export (Yandex Map Constructor): Point.iconCaption = name."""
+    data = json.load(open(path))
+    points, lines = [], []
+    for f in data.get("features", []):
+        g = f.get("geometry") or {}
+        props = f.get("properties") or {}
+        if g.get("type") == "LineString":
+            cs = []
+            for lng, lat, *_ in g["coordinates"]:
+                if not cs or hav(cs[-1], (lat, lng)) > 0.05:
+                    cs.append((lat, lng))
+            if len(cs) >= 2:
+                lines.append(cs)
+        elif g.get("type") == "Point":
+            lng, lat = g["coordinates"][:2]
+            name = (props.get("iconCaption") or props.get("name") or "").strip()
             points.append({"name": name, "lat": lat, "lng": lng})
     return points, lines
 

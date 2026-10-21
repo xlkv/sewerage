@@ -28,3 +28,11 @@ Asosiy versiya `main` branch'ida saqlangan. Bu branch'da quyidagilar qo'shildi; 
 - "Ulash" tugmasi bosilgandan keyingi forma: sinovdagi juftlik allaqachon ulangan edi.
 - Planshet layouti.
 - ✓ animatsiyasi kadrga tushmadi, status esa o'zgardi.
+
+## KML / GeoJSON import (`turon/tool/`)
+1. `python3 -I tool/kml_import.py fayl.kml|fayl.geojson out.json` — kolodetslar (nomlar aynan fayldagidek, takrorlansa ham), egri quvurlar (burilishlar `pipes.path` da), chiziq uchida kolodets bo'lmasa "Tugun-N" tuguni, simulyatsiya qilingan qurilish tarixi.
+2. `python3 -I tool/kml_import_sql.py out.json import.sql --note "KML: Kh"` — bitta tranzaksiyali SQL.
+3. `supabase db query --linked --project-ref puoplqftkoztzgzfzstn -f import.sql`
+4. Yo'nalishlar keyin tuzatilgan fayl kelsa: pipes eksport → `tool/fix_directions.py asl.kml tuzatilgan.geojson export.json fix.sql` → shu SQL. Kod, status va tarix saqlanadi.
+
+2026-10-21: `Kh` KML import qilindi (498 kolodets, 428 quvur, 97.6 km). `done_arrows.geojson` bo'yicha 47 chiziqdagi 224 quvur yo'nalishi tuzatildi.
