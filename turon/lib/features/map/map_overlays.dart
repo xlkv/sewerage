@@ -152,21 +152,28 @@ class _TraceRow extends StatelessWidget {
 
 class TimelinePanel extends ConsumerWidget {
   final TimelineState timeline;
-  final double completedMeters;
+
+  /// Length of the pipes revealed so far and of the whole network.
+  final double shownMeters;
   final double totalMeters;
 
   const TimelinePanel({
     super.key,
     required this.timeline,
-    required this.completedMeters,
+    required this.shownMeters,
     required this.totalMeters,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(timelineProvider.notifier);
-    final date = DateFormat('d-MMMM, yyyy', 'uz').format(timeline.at);
-    final pct = totalMeters <= 0 ? 0.0 : completedMeters / totalMeters;
+    final at = timeline.at;
+    final title = at == null
+        ? 'Qurilish rejasi'
+        : DateFormat('d-MMMM, yyyy', 'uz').format(at);
+    final cur = timeline.current;
+    final shownSteps = timeline.finished ? timeline.total : timeline.step;
+    final pct = totalMeters <= 0 ? 0.0 : shownMeters / totalMeters;
 
     return Container(
       decoration: _cardDecoration(),
@@ -196,7 +203,7 @@ class TimelinePanel extends ConsumerWidget {
             ],
           ),
           Text(
-            date,
+            title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
@@ -206,13 +213,38 @@ class TimelinePanel extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 2),
-          Text(
-            '${GeoUtils.formatLength(completedMeters)} tugallangan · '
-            '${(pct * 100).round()}% tarmoqdan',
-            style: const TextStyle(
-              color: AppColors.completed,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              if (cur != null) ...[
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: AppColors.forStatus(cur.status),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${cur.isPipe ? 'Quvur' : 'Kolodets'} ${cur.code}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  '$shownSteps / ${timeline.total} · '
+                  '${GeoUtils.formatLength(shownMeters)} · '
+                  '${(pct * 100).round()}%',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
           Row(
             children: [

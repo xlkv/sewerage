@@ -1,0 +1,38 @@
+name: yandex_map_desktop
+description: >-
+  Yandex Maps JS API 2.1 for Flutter desktop via WebView.
+  Windows (Edge WebView2) and macOS (WKWebView) support.
+version: 0.2.0
+homepage: https://github.com/xlkv/yandex_map_desktop
+
+repository: https://github.com/xlkv/yandex_map_desktop
+issue_tracker: https://github.com/xlkv/yandex_map_desktop/issues
+
+platforms:
+  windows:
+  macos:
+
+topics:
+  - map
+  - yandex
+  - windows
+  - macos
+  - webview
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_windows: ^0.4.0
+  webview_flutter: ^4.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  # Pure Dart package — no assets, no native plugin code of its own.

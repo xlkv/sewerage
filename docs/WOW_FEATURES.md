@@ -36,3 +36,13 @@ Asosiy versiya `main` branch'ida saqlangan. Bu branch'da quyidagilar qo'shildi; 
 4. Yo'nalishlar keyin tuzatilgan fayl kelsa: pipes eksport → `tool/fix_directions.py asl.kml tuzatilgan.geojson export.json fix.sql` → shu SQL. Kod, status va tarix saqlanadi.
 
 2026-10-21: `Kh` KML import qilindi (498 kolodets, 428 quvur, 97.6 km). `done_arrows.geojson` bo'yicha 47 chiziqdagi 224 quvur yo'nalishi tuzatildi.
+
+## 2026-10-22: Windows va yangi taymlayn
+- **Windows xaritasi:** `yandex_map_desktop` (Yandex JS API 2.1, WebView2) loyiha ichiga nusxalandi (`turon/packages/yandex_map_desktop`, v0.2.0) va kengaytirildi:
+  - kursor ostidagi nuqta zoom'da joyida qoladi (avvalgi qadamning maqsad holatidan, proyeksiya orqali hisoblanadi, touchpad hodisalari jamlanadi);
+  - faqat o'zgargan obyektlar yuboriladi (`upsert`/`remove`);
+  - PNG belgilar (aylantirish, masshtab, matn, drag), CSS pulsatsiya;
+  - kontur va punktirli chiziqlar, matnli pill'lar, kamera animatsiyasi davomiyligi, xarita turi va filtri.
+- Ilova `NetworkLayer` interfeysi orqali ishlaydi: Android'da `MapObjectsLayerController` (MapKit), Windows'da `DesktopNetworkLayer`. Belgilar bir xil kod bilan chiziladi. Faqat quvur ichidagi oqim animatsiyasi Windows'da statik punktir.
+- JS API kaliti: `env/dev.json` → `YANDEX_JS_KEY`.
+- **Taymlayn = qurilish rejasi:** butun tarmoq bittadan chizib boriladi (kolodets → quvur o'sadi → kolodets). Tartib shimoli-g'arbdan boshlanadi va chiziqlar bo'ylab davom etadi. Har bir obyekt o'zining haqiqiy rangida chiqadi. Kamera bir qismga (~340 m) uchadi, uni quradi va keyingi qismga o'tadi. Oxirida butun tarmoqqa uzoqlashadi. Tezlik 1x/2x/4x/8x, standart 2x.

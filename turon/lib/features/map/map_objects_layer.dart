@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'network_graph.dart';
+import 'network_layer.dart';
 import 'package:yandex_maps_mapkit_lite/image.dart' as ymk_image;
 import 'package:yandex_maps_mapkit_lite/mapkit.dart' as ymk;
 
@@ -344,7 +345,8 @@ class _DragListenerImpl implements ymk.MapObjectDragListener {
 }
 
 /// Manages diff-updated Yandex MapKit collections for pipes, direction arrows, and manholes.
-class MapObjectsLayerController {
+/// MapKit (Android/iOS) implementation of [NetworkLayer].
+class MapObjectsLayerController implements NetworkLayer {
   final ymk.MapObjectCollection rootCollection;
   final void Function(String manholeId) onManholeTap;
   final void Function(String pipeId) onPipeTap;
@@ -380,9 +382,11 @@ class MapObjectsLayerController {
   bool _initialSyncDone = false;
 
   /// False when the OS asks to reduce motion.
+  @override
   bool animationsEnabled = true;
 
   /// "Quyosh" appearance: thicker, higher-contrast pipes.
+  @override
   bool highContrast = false;
 
   late final ymk.MapObjectCollection _traceCollection;
@@ -394,9 +398,16 @@ class MapObjectsLayerController {
   final Map<String, String> _pipeLabelTexts = {};
   final Map<String, Pipe> _pipesById = {};
   ymk.PolylineMapObject? _rubberLine;
+
+  // Construction replay: the object currently being built.
+  late final ymk.MapObjectCollection _ghostCollection;
+  ymk.PolylineMapObject? _ghostLine;
+  String? _buildId;
+  bool _buildIsPipe = false;
   FlowTrace? _trace;
   bool _showLabels = false;
 
+  @override
   bool get hasActiveAnimations =>
       animationsEnabled &&
       (_flowPolylines.isNotEmpty ||
@@ -422,6 +433,7 @@ class MapObjectsLayerController {
     // trace glow -> pipes -> flow dashes -> arrows -> rubber band ->
     // labels -> pulse halos -> manholes.
     _traceCollection = rootCollection.addCollection();
+    _ghostCollection = rootCollection.addCollection();
     _pipesCollection = rootCollection.addCollection();
     _flowCollection = rootCollection.addCollection();
     _arrowsCollection = rootCollection.addCollection();
@@ -432,6 +444,7 @@ class MapObjectsLayerController {
   }
 
   /// Synchronizes map objects by diffing against the previous snapshot.
+  @override
   void sync({
     required Map<String, Manhole> allManholes,
     required Map<String, Pipe> allPipes,
@@ -440,6 +453,7 @@ class MapObjectsLayerController {
     required MapMode mode,
     required double zoom,
     FlowTrace? trace,
+    Set<String> hiddenManholeIds = const {},
   }) {
     _trace = trace;
     _showLabels = zoom >= MapObjectsLayer.pipeLabelMinZoom;
@@ -453,7 +467,10 @@ class MapObjectsLayerController {
       activeStatuses,
       forceIncludeManholeId: movingManholeId,
     );
-    final visibleManholeMap = {for (final m in visibleManholes) m.id: m};
+    final visibleManholeMap = {
+      for (final m in visibleManholes)
+        if (!hiddenManholeIds.contains(m.id)) m.id: m,
+    };
 
     final visiblePipes = MapObjectsLayer.filterPipes(
       allPipes,
@@ -879,7 +896,7 @@ class MapObjectsLayerController {
       } else if (!_drawOnStartMs.containsKey(id)) {
         flow.geometry = geometry;
       }
-      flow.visible = !_drawOnStartMs.containsKey(id);
+      flow.visible = !_drawOnStartMs.containsKey(id) && id != _buildId;
       flow.style = _flowStyle(snapshot, 0);
       flow.zIndex = snapshot.isSelected ? 6.0 : 2.0;
     }
@@ -1002,7 +1019,84 @@ class MapObjectsLayerController {
     }
   }
 
+  /// Construction replay: grows pipe [id] along its path to fraction [t]
+  /// over a grey "planned" ghost, or pops manhole [id] in. Passing another
+  /// id (or null) finishes the previous object.
+  @override
+  void setBuildProgress(String? id, {bool isPipe = false, double t = 1}) {
+    if (id != _buildId) {
+      _finishBuild();
+      _buildId = id;
+      _buildIsPipe = isPipe;
+    }
+    if (id == null) return;
+    if (isPipe) {
+      final snapshot = _pipeSnapshots[id];
+      final line = _pipePolylines[id];
+      if (snapshot == null || line == null || !line.isValid()) return;
+      var ghost = _ghostLine;
+      if (ghost == null || !ghost.isValid()) {
+        ghost = _ghostCollection.addPolylineWithGeometry(snapshot.polyline);
+        ghost.setStrokeColor(AppColors.planned.withValues(alpha: 0.7));
+        ghost.style = ymk.LineStyle(
+          strokeWidth: snapshot.widthDp,
+          outlineWidth: 2,
+          outlineColor: Colors.white,
+          dashLength: 10,
+          gapLength: 6,
+        );
+        _ghostLine = ghost;
+      }
+      line.geometry = snapshot.partial(t);
+      final arrow = _pipeArrows[id];
+      if (arrow != null && arrow.isValid()) arrow.visible = t >= 1;
+      final flow = _flowPolylines[id];
+      if (flow != null && flow.isValid()) flow.visible = false;
+    } else {
+      final placemark = _manholePlacemarks[id];
+      if (placemark == null || !placemark.isValid()) return;
+      placemark.setIconStyle(
+        ymk.IconStyle(
+          scale: math.max(0.01, Curves.easeOutBack.transform(t)),
+          zIndex: 25.0,
+        ),
+      );
+    }
+  }
+
+  void _finishBuild() {
+    final id = _buildId;
+    _buildId = null;
+    final ghost = _ghostLine;
+    if (ghost != null && ghost.isValid()) _ghostCollection.remove(ghost);
+    _ghostLine = null;
+    if (id == null) return;
+    if (_buildIsPipe) {
+      final snapshot = _pipeSnapshots[id];
+      final line = _pipePolylines[id];
+      if (snapshot != null && line != null && line.isValid()) {
+        line.geometry = snapshot.polyline;
+      }
+      final arrow = _pipeArrows[id];
+      if (arrow != null && arrow.isValid()) arrow.visible = true;
+      final flow = _flowPolylines[id];
+      if (flow != null && flow.isValid()) flow.visible = true;
+    } else {
+      final placemark = _manholePlacemarks[id];
+      final snapshot = _manholeSnapshots[id];
+      if (placemark != null && placemark.isValid() && snapshot != null) {
+        placemark.setIconStyle(
+          ymk.IconStyle(
+            scale: 1.0,
+            zIndex: snapshot.isSelected ? 20.0 : 10.0,
+          ),
+        );
+      }
+    }
+  }
+
   /// Re-applies pipe styles (e.g. after switching the "Quyosh" appearance).
+  @override
   void restylePipes() {
     for (final entry in _pipePolylines.entries) {
       final snapshot = _pipeSnapshots[entry.key];
@@ -1013,6 +1107,7 @@ class MapObjectsLayerController {
   }
 
   /// Dashed preview line while drawing a pipe (null clears it).
+  @override
   void setRubberBand(
     ({double lat, double lng})? from,
     ({double lat, double lng})? to, {
@@ -1102,6 +1197,7 @@ class MapObjectsLayerController {
   }
 
   /// Advances all map animations; called by the screen's ticker (≤ 30 fps).
+  @override
   void tick() {
     if (!animationsEnabled) return;
     final now = _clock.elapsedMilliseconds;
@@ -1170,14 +1266,14 @@ class MapObjectsLayerController {
     return _haloIconCache.putIfAbsent(
       key,
       () => ymk_image.ImageProvider(
-        () => _drawHaloImage(zoomBucket == 'dot' ? 16.0 : 40.0),
+        () => drawHaloImage(zoomBucket == 'dot' ? 16.0 : 40.0),
         cacheable: true,
         id: key,
       ),
     );
   }
 
-  static Future<ui.Image> _drawHaloImage(double diameterDp) async {
+  static Future<ui.Image> drawHaloImage(double diameterDp) async {
     final dpr =
         (ui.PlatformDispatcher.instance.views.firstOrNull?.devicePixelRatio ??
                 2.75)
@@ -1229,7 +1325,7 @@ class MapObjectsLayerController {
     return _arrowIconCache.putIfAbsent(
       key,
       () => ymk_image.ImageProvider(
-        () => _drawArrowImage(color, isSelected),
+        () => drawArrowImage(color, isSelected),
         cacheable: true,
         id: key,
       ),
@@ -1440,7 +1536,7 @@ class MapObjectsLayerController {
     return image;
   }
 
-  static Future<ui.Image> _drawArrowImage(Color color, bool isSelected) async {
+  static Future<ui.Image> drawArrowImage(Color color, bool isSelected) async {
     final dpr =
         (ui.PlatformDispatcher.instance.views.firstOrNull?.devicePixelRatio ??
                 2.75)

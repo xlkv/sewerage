@@ -1,5 +1,6 @@
 {
   "SUPABASE_URL": "",
   "SUPABASE_ANON_KEY": "",
-  "YANDEX_MAPKIT_KEY": ""
+  "YANDEX_MAPKIT_KEY": "",
+  "YANDEX_JS_KEY": ""
 }

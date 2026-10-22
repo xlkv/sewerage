@@ -4,7 +4,6 @@ import 'package:turon/data/models/manhole.dart';
 import 'package:turon/data/models/pipe.dart';
 import 'package:turon/data/models/work_status.dart';
 import 'package:turon/core/geo_utils.dart';
-import 'package:turon/features/map/feature_providers.dart';
 import 'package:turon/features/map/map_mode.dart';
 import 'package:turon/features/map/map_overlays.dart';
 import 'package:turon/features/report/network_report.dart';
@@ -88,15 +87,6 @@ void main() {
       ], 0.5);
       expect(mid.lat, closeTo(0.0, 1e-4));
       expect(mid.lng, closeTo(0.01, 1e-4));
-    });
-  });
-
-  group('TimelineState', () {
-    test('progress is 0 at start and 1 at end', () {
-      final start = DateTime(2026, 10, 1);
-      final end = DateTime(2026, 10, 11);
-      expect(TimelineState(start: start, end: end, at: start).progress, 0);
-      expect(TimelineState(start: start, end: end, at: end).progress, 1);
     });
   });
 

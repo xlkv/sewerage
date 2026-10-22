@@ -1,9 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/repositories/auth_repo.dart';
-import '../../data/models/work_status.dart';
 import 'network_graph.dart';
+import 'timeline_plan.dart';
 
 /// Full status history, loaded page by page: the API returns at most 1000
 /// rows per request and the history is a few thousand rows. Re-fetched when
@@ -39,42 +41,75 @@ final traceProvider = NotifierProvider<TraceNotifier, String?>(
   TraceNotifier.new,
 );
 
+enum TimelinePhase { moving, building, finale, done }
+
+/// Replay position in a [TimelinePlan]: the camera flies to a part, then the
+/// part's objects are built one by one, then the next part; finally the
+/// camera zooms out to the whole network.
 class TimelineState {
-  final DateTime start;
-  final DateTime end;
-  final DateTime at;
+  final TimelinePlan plan;
+
+  /// Index of the step being built (== steps.length when all are built).
+  final int step;
+
+  /// Build progress of [step], 0..1.
+  final double stepProgress;
+  final TimelinePhase phase;
+
+  /// Time spent in a moving/finale phase (1x milliseconds).
+  final double phaseMs;
   final bool playing;
 
-  /// Real time the whole range takes at 1x.
-  final Duration playback;
-
-  /// 1, 2 or 4.
+  /// 1, 2, 4 or 8.
   final int speed;
 
   const TimelineState({
-    required this.start,
-    required this.end,
-    required this.at,
+    required this.plan,
+    this.step = 0,
+    this.stepProgress = 0,
+    this.phase = TimelinePhase.moving,
+    this.phaseMs = 0,
     this.playing = false,
-    this.playback = const Duration(seconds: 30),
-    this.speed = 1,
+    this.speed = 2,
   });
 
-  double get progress {
-    final total = end.difference(start).inMinutes;
-    if (total <= 0) return 1;
-    return at.difference(start).inMinutes / total;
-  }
+  /// Camera flight between parts and the final zoom-out, at 1x.
+  static const double moveMs = 1100;
+  static const double finaleMs = 1800;
 
-  TimelineState copyWith({DateTime? at, bool? playing, int? speed}) =>
-      TimelineState(
-        start: start,
-        end: end,
-        at: at ?? this.at,
-        playing: playing ?? this.playing,
-        playback: playback,
-        speed: speed ?? this.speed,
-      );
+  int get total => plan.steps.length;
+
+  bool get finished => step >= total;
+
+  /// Real work date of the current step, if the history has one.
+  DateTime? get at =>
+      plan.steps.isEmpty ? null : plan.steps[math.min(step, total - 1)].at;
+
+  BuildStep? get current => finished ? null : plan.steps[step];
+
+  int get chunk => plan.chunks.isEmpty
+      ? 0
+      : plan.chunkOfStep[math.min(step, total - 1)];
+
+  double get progress =>
+      total == 0 ? 1 : ((step + stepProgress) / total).clamp(0.0, 1.0);
+
+  TimelineState copyWith({
+    int? step,
+    double? stepProgress,
+    TimelinePhase? phase,
+    double? phaseMs,
+    bool? playing,
+    int? speed,
+  }) => TimelineState(
+    plan: plan,
+    step: step ?? this.step,
+    stepProgress: stepProgress ?? this.stepProgress,
+    phase: phase ?? this.phase,
+    phaseMs: phaseMs ?? this.phaseMs,
+    playing: playing ?? this.playing,
+    speed: speed ?? this.speed,
+  );
 }
 
 /// Construction timeline replay (null = live map).
@@ -82,70 +117,95 @@ class TimelineNotifier extends Notifier<TimelineState?> {
   @override
   TimelineState? build() => null;
 
-  void open(List<StatusEvent> events) {
-    final now = DateTime.now();
-    final first = events.isEmpty
-        ? now.subtract(const Duration(days: 1))
-        : events
-              .map((e) => e.changedAt)
-              .reduce((a, b) => a.isBefore(b) ? a : b);
-    final start = DateTime(first.year, first.month, first.day);
-    // ~0.35 s per started object so every pipe is seen being built.
-    final started = events
-        .where((e) => e.status == WorkStatus.inProgress)
-        .length;
-    final ms = (started * 350).clamp(20000, 240000);
-    state = TimelineState(
-      start: start,
-      end: now,
-      at: start,
-      playing: true,
-      playback: Duration(milliseconds: ms),
-    );
-  }
-
-  /// 1x → 2x → 4x → 1x.
-  void cycleSpeed() {
-    final s = state;
-    if (s == null) return;
-    state = s.copyWith(speed: s.speed >= 4 ? 1 : s.speed * 2);
+  void open(TimelinePlan plan) {
+    state = TimelineState(plan: plan, playing: plan.steps.isNotEmpty);
   }
 
   void close() => state = null;
 
+  /// Jumps to a position; the camera flies to that part first.
   void seek(double progress) {
     final s = state;
-    if (s == null) return;
-    final total = s.end.difference(s.start).inMinutes;
+    if (s == null || s.total == 0) return;
+    final step = (progress.clamp(0.0, 1.0) * s.total).floor();
     state = s.copyWith(
-      at: s.start.add(
-        Duration(minutes: (total * progress.clamp(0, 1)).round()),
-      ),
+      step: math.min(step, s.total),
+      stepProgress: 0,
+      phase: step >= s.total ? TimelinePhase.done : TimelinePhase.moving,
+      phaseMs: 0,
     );
   }
 
   void setPlaying(bool playing) {
     final s = state;
     if (s == null) return;
-    if (playing && s.progress >= 1) {
-      state = s.copyWith(at: s.start, playing: true);
+    if (playing && s.phase == TimelinePhase.done) {
+      state = s.copyWith(
+        step: 0,
+        stepProgress: 0,
+        phase: TimelinePhase.moving,
+        phaseMs: 0,
+        playing: true,
+      );
     } else {
       state = s.copyWith(playing: playing);
     }
   }
 
-  /// Advances playback.
-  void step(Duration dt) {
+  /// 1x → 2x → 4x → 8x → 1x.
+  void cycleSpeed() {
+    final s = state;
+    if (s == null) return;
+    state = s.copyWith(speed: s.speed >= 8 ? 1 : s.speed * 2);
+  }
+
+  /// Advances the replay by real time [dt].
+  void advance(Duration dt) {
     final s = state;
     if (s == null || !s.playing) return;
-    final total = s.end.difference(s.start);
-    final next = s.at.add(
-      total * (dt.inMilliseconds * s.speed / s.playback.inMilliseconds),
-    );
-    if (!next.isBefore(s.end)) {
-      state = s.copyWith(at: s.end, playing: false);
-    } else {
-      state = s.copyWith(at: next);
+    final ms = dt.inMicroseconds / 1000 * s.speed;
+    switch (s.phase) {
+      case TimelinePhase.moving:
+        final t = s.phaseMs + ms;
+        state = t >= TimelineState.moveMs
+            ? s.copyWith(phase: TimelinePhase.building, phaseMs: 0)
+            : s.copyWith(phaseMs: t);
+      case TimelinePhase.building:
+        final cur = s.current;
+        if (cur == null) {
+          state = s.copyWith(phase: TimelinePhase.finale, phaseMs: 0);
+          return;
+        }
+        final p = s.stepProgress + ms / cur.durationMs;
+        if (p < 1) {
+          state = s.copyWith(stepProgress: p);
+          return;
+        }
+        final next = s.step + 1;
+        if (next >= s.total) {
+          state = s.copyWith(
+            step: next,
+            stepProgress: 0,
+            phase: TimelinePhase.finale,
+            phaseMs: 0,
+          );
+        } else if (s.plan.chunkOfStep[next] != s.plan.chunkOfStep[s.step]) {
+          state = s.copyWith(
+            step: next,
+            stepProgress: 0,
+            phase: TimelinePhase.moving,
+            phaseMs: 0,
+          );
+        } else {
+          state = s.copyWith(step: next, stepProgress: 0);
+        }
+      case TimelinePhase.finale:
+        final t = s.phaseMs + ms;
+        state = t >= TimelineState.finaleMs
+            ? s.copyWith(phase: TimelinePhase.done, playing: false)
+            : s.copyWith(phaseMs: t);
+      case TimelinePhase.done:
+        state = s.copyWith(playing: false);
     }
   }
 }
