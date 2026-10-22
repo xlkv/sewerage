@@ -363,7 +363,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         156543.03392 *
         math.cos(target.lat * math.pi / 180) /
         math.pow(2, _currentZoom);
-    final threshold = 28 * metersPerDp;
+    // MapKit zoom is in physical pixels: scale to dp there.
+    final density = _desktop == null ? (_mapWindow?.scaleFactor ?? 1) : 1;
+    final threshold = 28 * metersPerDp * density;
     Manhole? snap;
     var best = double.infinity;
     for (final m in manholes.values) {
@@ -430,6 +432,54 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
     final midLat = (minLat + maxLat) / 2;
     final midLng = (minLng + maxLng) / 2;
+
+    // MapKit (Android): let the map fit the box into the free pixel rect —
+    // its zoom levels are in physical pixels, so dp maths would be off by
+    // the screen density.
+    final window = _mapWindow;
+    if (_desktop == null && window != null && window.map.isValid()) {
+      // Grow a tiny box (single manhole / short pipe) to at least minSpanM.
+      final halfLat = minSpanM / 2 / 110574;
+      final halfLng =
+          minSpanM / 2 / (111320 * math.cos(midLat * math.pi / 180));
+      final sw = ymk.Point(
+        latitude: math.min(minLat, midLat - halfLat),
+        longitude: math.min(minLng, midLng - halfLng),
+      );
+      final ne = ymk.Point(
+        latitude: math.max(maxLat, midLat + halfLat),
+        longitude: math.max(maxLng, midLng + halfLng),
+      );
+      final scale = window.scaleFactor;
+      final w = window.width().toDouble();
+      final h = window.height().toDouble();
+      final margin = 40 * scale;
+      final focus = ymk.ScreenRect(
+        ymk.ScreenPoint(x: margin, y: insetTop * scale),
+        ymk.ScreenPoint(
+          x: w - margin,
+          y: math.max(insetTop * scale + 100, h - insetBottom * scale),
+        ),
+      );
+      try {
+        final pos = window.map.cameraPositionForGeometry(
+          ymk.Geometry.fromBoundingBox(ymk.BoundingBox(sw, ne)),
+          focusRect: focus,
+          azimuth: 0,
+          tilt: 0,
+        );
+        return ymk.CameraPosition(
+          pos.target,
+          zoom: pos.zoom.clamp(minZoom, maxZoom),
+          azimuth: 0,
+          tilt: 0,
+        );
+      } catch (e) {
+        debugPrint('TuronMapKit: cameraPositionForGeometry failed: $e');
+      }
+    }
+
+    // Yandex JS API (desktop): zoom levels are in CSS pixels (dp).
     final spanNS = GeoUtils.haversineMeters(minLat, midLng, maxLat, midLng);
     final spanEW = GeoUtils.haversineMeters(midLat, minLng, midLat, maxLng);
     final size = MediaQuery.sizeOf(context);
@@ -475,8 +525,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final layer = _layerController;
     if (next == null) {
       layer?.setBuildProgress(null);
+      _applyHighContrast(ref.read(mapAppearanceProvider));
       _syncMapObjects();
       return;
+    }
+    if (prev == null && layer != null && !layer.highContrast) {
+      // Thicker, clearer lines while the network is drawn.
+      layer.highContrast = true;
+      layer.restylePipes();
     }
     if (next.playing && !(prev?.playing ?? false)) _timelineFollow = true;
 
@@ -508,16 +564,37 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (enteredMove && next.plan.chunks.isNotEmpty) {
       final camera = _cameraFor(
         next.plan.chunks[next.chunk].points,
-        insetTop: 150, // top panel + stats card
-        insetBottom: 210, // timeline panel
+        insetTop: _replayInsetTop, // top panel + stats card
+        insetBottom: _replayInsetBottom, // timeline panel
         minZoom: 15.5,
         maxZoom: 17.5,
         minSpanM: 90,
       );
       if (camera != null) {
+        _replayZoom = camera.zoom;
+        // Fly with the zoom of the whole part, centred on its first object.
+        final first = next.current;
+        final target = first == null ? null : _stepCenter(first);
         _moveCamera(
-          camera,
+          target == null ? camera : _centerInFreeArea(target, camera.zoom),
           duration: TimelineState.moveMs / 1000 / next.speed * 0.9,
+        );
+      }
+    }
+    // While building, keep the object being built in the middle of the free
+    // area (small glides: consecutive objects are neighbours).
+    final enteredStep =
+        next.phase == TimelinePhase.building &&
+        (prev == null ||
+            prev.step != next.step ||
+            prev.phase != TimelinePhase.building);
+    final zoom = _replayZoom;
+    if (enteredStep && cur != null && zoom != null) {
+      final target = _stepCenter(cur);
+      if (target != null) {
+        _moveCamera(
+          _centerInFreeArea(target, zoom),
+          duration: math.min(0.45, cur.durationMs / 1000 / next.speed),
         );
       }
     }
@@ -536,6 +613,55 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         );
       }
     }
+  }
+
+  double? _replayZoom;
+
+  static const double _replayInsetTop = 175;
+  static const double _replayInsetBottom = 235;
+
+  /// Centre of a replay step (pipe: half way along its path).
+  ({double lat, double lng})? _stepCenter(BuildStep step) {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    if (!step.isPipe) {
+      final m = manholes[step.id];
+      return m == null ? null : (lat: m.lat, lng: m.lng);
+    }
+    final p = ref.read(pipesProvider).asData?.value[step.id];
+    final a = p == null ? null : manholes[p.fromManholeId];
+    final b = p == null ? null : manholes[p.toManholeId];
+    if (a == null || b == null) return null;
+    final mid = GeoUtils.alongPolyline([
+      (lat: a.lat, lng: a.lng),
+      for (final v in p!.path) (lat: v[0], lng: v[1]),
+      (lat: b.lat, lng: b.lng),
+    ], 0.5);
+    return (lat: mid.lat, lng: mid.lng);
+  }
+
+  /// Camera at [zoom] that puts [point] in the middle of the area between
+  /// the top card and the bottom replay panel.
+  ymk.CameraPosition _centerInFreeArea(
+    ({double lat, double lng}) point,
+    double zoom,
+  ) {
+    // MapKit zoom is in physical pixels, the JS API's in dp.
+    final density = _desktop == null ? (_mapWindow?.scaleFactor ?? 1) : 1;
+    final metersPerDp =
+        156543.03392 *
+        math.cos(point.lat * math.pi / 180) /
+        math.pow(2, zoom) *
+        density;
+    final offsetDp = (_replayInsetTop - _replayInsetBottom) / 2;
+    return ymk.CameraPosition(
+      ymk.Point(
+        latitude: point.lat + offsetDp * metersPerDp / 110574,
+        longitude: point.lng,
+      ),
+      zoom: zoom,
+      azimuth: 0,
+      tilt: 0,
+    );
   }
 
   Future<void> _shareReport() async {

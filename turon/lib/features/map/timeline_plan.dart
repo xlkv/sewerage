@@ -67,8 +67,8 @@ class TimelinePlan {
   static const int pipeMaxMs = 1100;
 
   /// Max size (m) of one camera part, and max steps in it.
-  static const double chunkSpanM = 340;
-  static const int chunkMaxSteps = 18;
+  static const double chunkSpanM = 260;
+  static const int chunkMaxSteps = 14;
 
   bool get isEmpty => steps.isEmpty;
 
