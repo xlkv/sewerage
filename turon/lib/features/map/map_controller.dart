@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/models/pipe.dart';
 import '../../data/models/work_status.dart';
 import 'map_mode.dart';
+import 'network_graph.dart';
 
 enum MapLayer { scheme, satellite }
 
@@ -71,8 +72,7 @@ class MapController extends Notifier<MapState> {
     String manholeB,
   ) {
     for (final p in pipes) {
-      final sameDir =
-          p.fromManholeId == manholeA && p.toManholeId == manholeB;
+      final sameDir = p.fromManholeId == manholeA && p.toManholeId == manholeB;
       final reverseDir =
           p.fromManholeId == manholeB && p.toManholeId == manholeA;
       if (sameDir || reverseDir) return true;
@@ -81,11 +81,7 @@ class MapController extends Notifier<MapState> {
   }
 
   void setMode(MapMode mode) {
-    state = state.copyWith(
-      mode: mode,
-      activeForm: null,
-      snackbarMessage: null,
-    );
+    state = state.copyWith(mode: mode, activeForm: null, snackbarMessage: null);
   }
 
   void select(Selection? selection) {
@@ -121,6 +117,26 @@ class MapController extends Notifier<MapState> {
     if (!isAdmin) return;
     state = const MapState(mode: AddPipeMode());
   }
+
+  /// Admin starts picking a section's pipes (new, or editing [sectionId]).
+  void startSection({
+    String? sectionId,
+    String? startId,
+    Set<String> pipeIds = const {},
+    bool isAdmin = true,
+  }) {
+    if (!isAdmin) return;
+    state = MapState(
+      mode: SectionMode(
+        sectionId: sectionId,
+        startId: startId,
+        pipeIds: pipeIds,
+      ),
+    );
+  }
+
+  static const String notConnectedMessage =
+      'Bu kolodetslar quvurlar orqali bog\'lanmagan';
 
   /// Admin taps "Joyini o'zgartirish" in Manhole details: View -> MoveManhole(id, lat, lng).
   void startMoveManhole(
@@ -177,14 +193,12 @@ class MapController extends Notifier<MapState> {
       case AddPipeMode():
         // Tapping empty map in AddPipe keeps waiting for manhole tap.
         break;
+      case SectionMode():
+        break;
       case MoveManholeMode(:final manholeId):
         // Allow tapping a point on map in MoveManhole mode as well as dragging.
         state = state.copyWith(
-          mode: MoveManholeMode(
-            manholeId: manholeId,
-            newLat: lat,
-            newLng: lng,
-          ),
+          mode: MoveManholeMode(manholeId: manholeId, newLat: lat, newLng: lng),
         );
     }
   }
@@ -233,6 +247,30 @@ class MapController extends Notifier<MapState> {
             snackbarMessage: null,
           );
         }
+      case SectionMode(startId: null):
+        state = state.copyWith(
+          mode: (state.mode as SectionMode).copyWith(startId: manholeId),
+          selection: ManholeSelection(manholeId),
+          snackbarMessage: null,
+        );
+      case final SectionMode m:
+        final from = m.endId ?? m.startId!;
+        if (from == manholeId) break;
+        final path = NetworkPaths.shortestPath(
+          from,
+          manholeId,
+          existingPipes,
+        );
+        state = path == null
+            ? state.copyWith(snackbarMessage: notConnectedMessage)
+            : state.copyWith(
+                mode: m.copyWith(
+                  endId: manholeId,
+                  pipeIds: {...m.pipeIds, ...path},
+                ),
+                selection: ManholeSelection(manholeId),
+                snackbarMessage: null,
+              );
       case AddManholeMode():
       case MoveManholeMode():
         break;
@@ -241,6 +279,12 @@ class MapController extends Notifier<MapState> {
 
   /// Handles tapping a Pipe polyline or arrow according to LLD 4.5.
   void onPipeTap(String pipeId) {
+    if (state.mode case final SectionMode m) {
+      final next = {...m.pipeIds};
+      if (!next.remove(pipeId)) next.add(pipeId);
+      state = state.copyWith(mode: m.copyWith(pipeIds: next));
+      return;
+    }
     if (state.mode is ViewMode) {
       state = state.copyWith(
         selection: PipeSelection(pipeId),

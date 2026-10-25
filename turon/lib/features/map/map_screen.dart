@@ -1,7 +1,18 @@
+import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../shared/widgets/map_controls.dart';
 import 'network_stats_card.dart';
+import 'feature_providers.dart';
+import 'network_layer.dart';
+import 'desktop_network_layer.dart';
+import 'package:yandex_map_desktop/yandex_map_desktop.dart' as ymd;
+import 'map_overlays.dart';
+import 'network_graph.dart';
+import 'timeline_plan.dart';
+import '../report/network_report.dart';
+import 'package:flutter/services.dart';
+import 'package:printing/printing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -26,6 +37,12 @@ import '../manhole/manhole_details.dart';
 import '../manhole/manhole_form.dart';
 import '../pipe/pipe_details.dart';
 import '../pipe/pipe_form.dart';
+import '../section/section_details.dart';
+import '../section/section_form_page.dart';
+import '../section/section_pick_panel.dart';
+import '../section/section_stats.dart';
+import '../section/sections_screen.dart';
+import '../../data/repositories/section_repo.dart';
 import 'filter_sheet.dart';
 import 'map_controller.dart';
 import 'map_mode.dart';
@@ -44,9 +61,13 @@ class _MapInputListenerImpl implements ymk.MapInputListener {
 }
 
 class _MapCameraListenerImpl implements ymk.MapCameraListener {
-  final void Function(double zoom) onZoomChanged;
+  final void Function(
+    ymk.CameraPosition position,
+    ymk.CameraUpdateReason reason,
+  )
+  onCameraChanged;
 
-  _MapCameraListenerImpl({required this.onZoomChanged});
+  _MapCameraListenerImpl({required this.onCameraChanged});
 
   @override
   void onCameraPositionChanged(
@@ -55,7 +76,7 @@ class _MapCameraListenerImpl implements ymk.MapCameraListener {
     ymk.CameraUpdateReason cameraUpdateReason,
     bool finished,
   ) {
-    onZoomChanged(cameraPosition.zoom);
+    onCameraChanged(cameraPosition, cameraUpdateReason);
   }
 }
 
@@ -91,7 +112,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   final ymk.TilesUrlProvider _satelliteUrlProvider =
       const _SatelliteTilesUrlProvider();
   ymk.CreateTileDataSource? _satelliteDataSourceFactory;
-  MapObjectsLayerController? _layerController;
+  NetworkLayer? _layerController;
+
+  // Windows/macOS map (Yandex JS API in a WebView).
+  ymd.YandexMapDesktopController? _desktop;
+  DesktopNetworkLayer? _desktopLayer;
+
+  /// A map engine is attached (MapKit window or desktop WebView).
+  bool get _hasMap =>
+      _desktop != null || (_mapWindow?.map.isValid() ?? false);
   ymk.MapInputListener? _inputListener;
   ymk.MapCameraListener? _cameraListener;
   AppLifecycleListener? _lifecycleListener;
@@ -101,6 +130,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _savingMove = false;
   bool _locatingGps = false;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  ({double lat, double lng})? _cameraTarget;
+  final _rubberInfo = ValueNotifier<RubberBandInfo?>(null);
+  String? _lastSnapId;
+  Timer? _timelineTimer;
 
   @override
   void initState() {
@@ -130,6 +163,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   @override
   void dispose() {
     _animationTimer?.cancel();
+    _timelineTimer?.cancel();
+    _rubberInfo.dispose();
     _lifecycleListener?.dispose();
     final map = _mapWindow?.map;
     if (map != null && map.isValid()) {
@@ -161,7 +196,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       'TuronMapKit: YandexMap onMapCreated (mapValid=${map.isValid()})',
     );
     _initSatelliteTileLayer(map, ref.read(mapLayerProvider));
-    _applyBlueprintStyle(map);
+    _applyAppearance(ref.read(mapAppearanceProvider));
 
     _inputListener = _MapInputListenerImpl(
       onTap: (point) {
@@ -173,13 +208,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     map.addInputListener(_inputListener!);
 
     _cameraListener = _MapCameraListenerImpl(
-      onZoomChanged: (zoom) {
-        final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
-        final nextBucket = MapObjectsLayer.zoomBucket(zoom);
-        _currentZoom = zoom;
-        if (prevBucket != nextBucket) {
-          _syncMapObjects();
-        }
+      onCameraChanged: (position, reason) {
+        if (reason == ymk.CameraUpdateReason.Gestures) _onUserMovedMap();
+        _onCameraChanged(
+          position.target.latitude,
+          position.target.longitude,
+          position.zoom,
+        );
       },
     );
     map.addCameraListener(_cameraListener!);
@@ -233,13 +268,460 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       '[{"tags":{"any":["poi"]},"stylers":{"visibility":"off"}},'
       '{"stylers":{"saturation":-0.8,"lightness":0.12}}]';
 
-  void _applyBlueprintStyle(ymk.Map map) {
-    try {
-      final ok = map.setMapStyle(_blueprintMapStyle);
-      debugPrint('TuronMapKit: blueprint map style applied=$ok');
-    } catch (e) {
-      debugPrint('TuronMapKit: blueprint map style failed: $e');
+  void _applyAppearance(MapAppearance appearance) {
+    final desktop = _desktop;
+    if (desktop != null) {
+      // The JS API has no vector styling: tint the base tiles instead.
+      desktop.setGroundFilter(switch (appearance) {
+        MapAppearance.blueprint => 'saturate(0.2) brightness(1.06)',
+        MapAppearance.sun => '',
+        MapAppearance.night =>
+          'invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92)',
+      });
+      _applyHighContrast(appearance);
+      return;
     }
+    final map = _mapWindow?.map;
+    if (map == null || !map.isValid()) return;
+    try {
+      final ok = map.setMapStyle(
+        appearance == MapAppearance.blueprint ? _blueprintMapStyle : '[]',
+      );
+      map.nightModeEnabled = appearance == MapAppearance.night;
+      debugPrint('TuronMapKit: map appearance=${appearance.name} style=$ok');
+    } catch (e) {
+      debugPrint('TuronMapKit: map appearance failed: $e');
+    }
+    _applyHighContrast(appearance);
+  }
+
+  void _applyHighContrast(MapAppearance appearance) {
+    final controller = _layerController;
+    if (controller != null &&
+        controller.highContrast != (appearance == MapAppearance.sun)) {
+      controller.highContrast = appearance == MapAppearance.sun;
+      controller.restylePipes();
+    }
+  }
+
+  /// Live data, or what the construction replay has revealed so far
+  /// (manholes stay in the map for pipe coordinates; unrevealed ones are
+  /// listed in `hidden`).
+  ({
+    Map<String, Manhole> manholes,
+    Map<String, Pipe> pipes,
+    Set<String> hidden,
+  })
+  _networkData() {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final timeline = ref.read(timelineProvider);
+    if (timeline == null) {
+      return (manholes: manholes, pipes: pipes, hidden: const <String>{});
+    }
+    final building = timeline.phase == TimelinePhase.building;
+    final key = (timeline.plan, timeline.step, building, manholes, pipes);
+    if (_replayKey != key || _replayView == null) {
+      _replayKey = key;
+      final revealed = timeline.plan.revealedThrough(
+        building ? timeline.step : timeline.step - 1,
+      );
+      _replayView = (
+        manholes: manholes,
+        pipes: {
+          for (final p in pipes.values)
+            if (revealed.contains(p.id)) p.id: p,
+        },
+        hidden: {
+          for (final id in manholes.keys)
+            if (!revealed.contains(id)) id,
+        },
+      );
+    }
+    return _replayView!;
+  }
+
+  Object? _replayKey;
+  ({
+    Map<String, Manhole> manholes,
+    Map<String, Pipe> pipes,
+    Set<String> hidden,
+  })?
+  _replayView;
+
+  /// Rubber band from the first chosen manhole to the map centre; snaps to
+  /// a manhole near the centre (≈ 28 dp).
+  void _updateRubberBand() {
+    final controller = _layerController;
+    final mode = ref.read(mapControllerProvider).mode;
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final from = mode is AddPipeMode && mode.fromManholeId != null
+        ? manholes[mode.fromManholeId]
+        : null;
+    final target = _cameraTarget;
+    if (controller == null || from == null || target == null) {
+      controller?.setRubberBand(null, null);
+      _rubberInfo.value = null;
+      _lastSnapId = null;
+      return;
+    }
+    final metersPerDp =
+        156543.03392 *
+        math.cos(target.lat * math.pi / 180) /
+        math.pow(2, _currentZoom);
+    // MapKit zoom is in physical pixels: scale to dp there.
+    final density = _desktop == null ? (_mapWindow?.scaleFactor ?? 1) : 1;
+    final threshold = 28 * metersPerDp * density;
+    Manhole? snap;
+    var best = double.infinity;
+    for (final m in manholes.values) {
+      if (m.id == from.id) continue;
+      final d = GeoUtils.haversineMeters(target.lat, target.lng, m.lat, m.lng);
+      if (d < threshold && d < best) {
+        best = d;
+        snap = m;
+      }
+    }
+    final end = snap != null ? (lat: snap.lat, lng: snap.lng) : target;
+    controller.setRubberBand(
+      (lat: from.lat, lng: from.lng),
+      end,
+      snapped: snap != null,
+    );
+    if (snap?.id != _lastSnapId) {
+      _lastSnapId = snap?.id;
+      if (snap != null) HapticFeedback.selectionClick();
+    }
+    _rubberInfo.value = RubberBandInfo(
+      meters: GeoUtils.haversineMeters(from.lat, from.lng, end.lat, end.lng),
+      snappedId: snap?.id,
+      snappedCode: snap?.code,
+    );
+  }
+
+  void _updateTimelineLoop(TimelineState? timeline) {
+    final playing = timeline?.playing ?? false;
+    if (playing && _timelineTimer == null) {
+      var last = DateTime.now();
+      _timelineTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
+        final now = DateTime.now();
+        ref.read(timelineProvider.notifier).advance(now.difference(last));
+        last = now;
+      });
+    } else if (!playing) {
+      _timelineTimer?.cancel();
+      _timelineTimer = null;
+    }
+  }
+
+  /// Camera that frames [points] inside the free part of the screen:
+  /// between [insetTop] (floating top panel/cards) and [insetBottom]
+  /// (bottom panel/buttons), in dp, with a margin; both width and height
+  /// are respected and the points are centred in that free area.
+  ymk.CameraPosition? _cameraFor(
+    Iterable<({double lat, double lng})> points, {
+    double insetTop = 150,
+    double insetBottom = 110,
+    double minZoom = 3,
+    double maxZoom = 18,
+    double minSpanM = 60,
+  }) {
+    final list = points.toList();
+    if (list.isEmpty) return null;
+    var minLat = list.first.lat, maxLat = list.first.lat;
+    var minLng = list.first.lng, maxLng = list.first.lng;
+    for (final p in list) {
+      minLat = math.min(minLat, p.lat);
+      maxLat = math.max(maxLat, p.lat);
+      minLng = math.min(minLng, p.lng);
+      maxLng = math.max(maxLng, p.lng);
+    }
+    final midLat = (minLat + maxLat) / 2;
+    final midLng = (minLng + maxLng) / 2;
+
+    // MapKit (Android): let the map fit the box into the free pixel rect —
+    // its zoom levels are in physical pixels, so dp maths would be off by
+    // the screen density.
+    final window = _mapWindow;
+    if (_desktop == null && window != null && window.map.isValid()) {
+      // Grow a tiny box (single manhole / short pipe) to at least minSpanM.
+      final halfLat = minSpanM / 2 / 110574;
+      final halfLng =
+          minSpanM / 2 / (111320 * math.cos(midLat * math.pi / 180));
+      final sw = ymk.Point(
+        latitude: math.min(minLat, midLat - halfLat),
+        longitude: math.min(minLng, midLng - halfLng),
+      );
+      final ne = ymk.Point(
+        latitude: math.max(maxLat, midLat + halfLat),
+        longitude: math.max(maxLng, midLng + halfLng),
+      );
+      final scale = window.scaleFactor;
+      final w = window.width().toDouble();
+      final h = window.height().toDouble();
+      final margin = 40 * scale;
+      final focus = ymk.ScreenRect(
+        ymk.ScreenPoint(x: margin, y: insetTop * scale),
+        ymk.ScreenPoint(
+          x: w - margin,
+          y: math.max(insetTop * scale + 100, h - insetBottom * scale),
+        ),
+      );
+      try {
+        final pos = window.map.cameraPositionForGeometry(
+          ymk.Geometry.fromBoundingBox(ymk.BoundingBox(sw, ne)),
+          focusRect: focus,
+          azimuth: 0,
+          tilt: 0,
+        );
+        return ymk.CameraPosition(
+          pos.target,
+          zoom: pos.zoom.clamp(minZoom, maxZoom),
+          azimuth: 0,
+          tilt: 0,
+        );
+      } catch (e) {
+        debugPrint('TuronMapKit: cameraPositionForGeometry failed: $e');
+      }
+    }
+
+    // Yandex JS API (desktop): zoom levels are in CSS pixels (dp).
+    final spanNS = GeoUtils.haversineMeters(minLat, midLng, maxLat, midLng);
+    final spanEW = GeoUtils.haversineMeters(midLat, minLng, midLat, maxLng);
+    final size = MediaQuery.sizeOf(context);
+    final freeW = size.width * 0.82;
+    final freeH = math.max(120.0, (size.height - insetTop - insetBottom) * 0.82);
+    final metersPerDp = math.max(
+      math.max(spanEW / freeW, spanNS / freeH),
+      minSpanM / freeW,
+    );
+    final zoom =
+        (math.log(
+                  156543.03392 * math.cos(midLat * math.pi / 180) / metersPerDp,
+                ) /
+                math.ln2)
+            .clamp(minZoom, maxZoom);
+    // Metres per dp at the zoom actually used (it may be clamped).
+    final mpd =
+        156543.03392 * math.cos(midLat * math.pi / 180) / math.pow(2, zoom);
+    // The free area's centre is (insetTop - insetBottom) / 2 dp below the
+    // screen centre; move the camera target the opposite way.
+    final offsetDp = (insetTop - insetBottom) / 2;
+    return ymk.CameraPosition(
+      ymk.Point(latitude: midLat + offsetDp * mpd / 110574, longitude: midLng),
+      zoom: zoom,
+      azimuth: 0,
+      tilt: 0,
+    );
+  }
+
+  void _fitTo(Iterable<({double lat, double lng})> points) {
+    final camera = _cameraFor(points);
+    if (camera != null) _moveCamera(camera);
+  }
+
+  // ── Construction replay director ──────────────────────────────────────
+  // Camera flies to a part, the part's objects are built one by one, then
+  // the next part; at the end it zooms out. A user drag stops the camera
+  // until play is pressed again.
+  bool _timelineFollow = true;
+
+  void _onTimelineChanged(TimelineState? prev, TimelineState? next) {
+    _updateTimelineLoop(next);
+    final layer = _layerController;
+    if (next == null) {
+      layer?.setBuildProgress(null);
+      _applyHighContrast(ref.read(mapAppearanceProvider));
+      _syncMapObjects();
+      return;
+    }
+    if (prev == null && layer != null && !layer.highContrast) {
+      // Thicker, clearer lines while the network is drawn.
+      layer.highContrast = true;
+      layer.restylePipes();
+    }
+    if (next.playing && !(prev?.playing ?? false)) _timelineFollow = true;
+
+    final changed =
+        prev == null ||
+        prev.plan != next.plan ||
+        prev.step != next.step ||
+        prev.phase != next.phase;
+    if (changed) _syncMapObjects();
+
+    final cur = next.current;
+    if (next.phase == TimelinePhase.building && cur != null) {
+      layer?.setBuildProgress(
+        cur.id,
+        isPipe: cur.isPipe,
+        t: Curves.easeInOut.transform(next.stepProgress.clamp(0.0, 1.0)),
+      );
+    } else {
+      layer?.setBuildProgress(null);
+    }
+
+    if (!_timelineFollow) return;
+    final enteredMove =
+        next.phase == TimelinePhase.moving &&
+        (prev == null ||
+            prev.phase != TimelinePhase.moving ||
+            prev.step != next.step ||
+            prev.plan != next.plan);
+    if (enteredMove && next.plan.chunks.isNotEmpty) {
+      final camera = _cameraFor(
+        next.plan.chunks[next.chunk].points,
+        insetTop: _replayInsetTop, // top panel + stats card
+        insetBottom: _replayInsetBottom, // timeline panel
+        minZoom: 15.5,
+        maxZoom: 17.5,
+        minSpanM: 90,
+      );
+      if (camera != null) {
+        _replayZoom = camera.zoom;
+        // Fly with the zoom of the whole part, centred on its first object.
+        final first = next.current;
+        final target = first == null ? null : _stepCenter(first);
+        _moveCamera(
+          target == null ? camera : _centerInFreeArea(target, camera.zoom),
+          duration: TimelineState.moveMs / 1000 / next.speed * 0.9,
+        );
+      }
+    }
+    // While building, keep the object being built in the middle of the free
+    // area (small glides: consecutive objects are neighbours).
+    final enteredStep =
+        next.phase == TimelinePhase.building &&
+        (prev == null ||
+            prev.step != next.step ||
+            prev.phase != TimelinePhase.building);
+    final zoom = _replayZoom;
+    if (enteredStep && cur != null && zoom != null) {
+      final target = _stepCenter(cur);
+      if (target != null) {
+        _moveCamera(
+          _centerInFreeArea(target, zoom),
+          duration: math.min(0.45, cur.durationMs / 1000 / next.speed),
+        );
+      }
+    }
+    if (next.phase == TimelinePhase.finale &&
+        prev?.phase != TimelinePhase.finale) {
+      final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+      final camera = _cameraFor(
+        manholes.values.map((m) => (lat: m.lat, lng: m.lng)),
+        insetTop: 150,
+        insetBottom: 210,
+      );
+      if (camera != null) {
+        _moveCamera(
+          camera,
+          duration: TimelineState.finaleMs / 1000 / math.sqrt(next.speed),
+        );
+      }
+    }
+  }
+
+  double? _replayZoom;
+
+  static const double _replayInsetTop = 175;
+  static const double _replayInsetBottom = 235;
+
+  /// Centre of a replay step (pipe: half way along its path).
+  ({double lat, double lng})? _stepCenter(BuildStep step) {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    if (!step.isPipe) {
+      final m = manholes[step.id];
+      return m == null ? null : (lat: m.lat, lng: m.lng);
+    }
+    final p = ref.read(pipesProvider).asData?.value[step.id];
+    final a = p == null ? null : manholes[p.fromManholeId];
+    final b = p == null ? null : manholes[p.toManholeId];
+    if (a == null || b == null) return null;
+    final mid = GeoUtils.alongPolyline([
+      (lat: a.lat, lng: a.lng),
+      for (final v in p!.path) (lat: v[0], lng: v[1]),
+      (lat: b.lat, lng: b.lng),
+    ], 0.5);
+    return (lat: mid.lat, lng: mid.lng);
+  }
+
+  /// Camera at [zoom] that puts [point] in the middle of the area between
+  /// the top card and the bottom replay panel.
+  ymk.CameraPosition _centerInFreeArea(
+    ({double lat, double lng}) point,
+    double zoom,
+  ) {
+    // MapKit zoom is in physical pixels, the JS API's in dp.
+    final density = _desktop == null ? (_mapWindow?.scaleFactor ?? 1) : 1;
+    final metersPerDp =
+        156543.03392 *
+        math.cos(point.lat * math.pi / 180) /
+        math.pow(2, zoom) *
+        density;
+    final offsetDp = (_replayInsetTop - _replayInsetBottom) / 2;
+    return ymk.CameraPosition(
+      ymk.Point(
+        latitude: point.lat + offsetDp * metersPerDp / 110574,
+        longitude: point.lng,
+      ),
+      zoom: zoom,
+      azimuth: 0,
+      tilt: 0,
+    );
+  }
+
+  Future<void> _shareReport() async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Hisobot tayyorlanmoqda…')),
+    );
+    try {
+      final bytes = await NetworkReport.build(
+        manholes: ref.read(manholesProvider).asData?.value ?? const {},
+        pipes: ref.read(pipesProvider).asData?.value ?? const {},
+        masters: ref.read(mastersProvider).asData?.value ?? const [],
+      );
+      final d = DateTime.now();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename:
+            'turon-hisobot-${d.year}-${d.month.toString().padLeft(2, '0')}-'
+            '${d.day.toString().padLeft(2, '0')}.pdf',
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Hisobot tayyorlab bo\'lmadi: $e')),
+      );
+    }
+  }
+
+  void _openSearch() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SearchSheet(
+        manholes: ref.read(manholesProvider).asData?.value ?? const {},
+        pipes: ref.read(pipesProvider).asData?.value ?? const {},
+        onSelect: (selection) {
+          Navigator.of(sheetContext).pop();
+          ref.read(traceProvider.notifier).clear();
+          ref.read(mapControllerProvider.notifier).select(selection);
+        },
+      ),
+    );
+  }
+
+  Future<void> _openTimeline() async {
+    final events = await ref.refresh(statusEventsProvider.future);
+    if (!mounted) return;
+    final plan = TimelinePlan.build(
+      manholes: ref.read(manholesProvider).asData?.value ?? const {},
+      pipes: ref.read(pipesProvider).asData?.value ?? const {},
+      events: events,
+    );
+    ref.read(mapControllerProvider.notifier).clearSelection();
+    ref.read(traceProvider.notifier).clear();
+    ref.read(timelineProvider.notifier).open(plan);
   }
 
   // One ticker for all map animations; runs only while something animates
@@ -267,6 +749,56 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
+  /// A user drag during replay hands the camera back to the user.
+  void _onUserMovedMap() {
+    if (ref.read(timelineProvider)?.playing ?? false) _timelineFollow = false;
+  }
+
+  void _onCameraChanged(double lat, double lng, double zoom) {
+    final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
+    final nextBucket = MapObjectsLayer.zoomBucket(zoom);
+    const labelZoom = MapObjectsLayer.pipeLabelMinZoom;
+    final labelsChanged = (_currentZoom >= labelZoom) != (zoom >= labelZoom);
+    _currentZoom = zoom;
+    _cameraTarget = (lat: lat, lng: lng);
+    if (prevBucket != nextBucket || labelsChanged) {
+      _syncMapObjects();
+    }
+    _updateRubberBand();
+  }
+
+  // ── Windows / macOS map ────────────────────────────────────────────────
+  void _onDesktopMapCreated(ymd.YandexMapDesktopController controller) {
+    _desktop = controller;
+    final layer = DesktopNetworkLayer(
+      controller: controller,
+      onManholeTap: (manholeId) {
+        final pipes = ref.read(pipesProvider).asData?.value.values ?? const [];
+        ref
+            .read(mapControllerProvider.notifier)
+            .onManholeTap(manholeId, existingPipes: pipes);
+      },
+      onPipeTap: (pipeId) {
+        ref.read(mapControllerProvider.notifier).onPipeTap(pipeId);
+      },
+      onManholeMoved: (lat, lng) {
+        ref
+            .read(mapControllerProvider.notifier)
+            .updateMoveManholePosition(lat, lng);
+      },
+    );
+    _desktopLayer = layer;
+    _layerController = layer;
+    _applyMapLayer(ref.read(mapLayerProvider));
+    _applyAppearance(ref.read(mapAppearanceProvider));
+    final manholesData = ref.read(manholesProvider).asData?.value;
+    if (manholesData != null && !_initialCameraApplied) {
+      _applyInitialCamera(manholesData);
+    }
+    _syncMapObjects();
+    setState(() {});
+  }
+
   void _initSatelliteTileLayer(ymk.Map map, MapLayer initialLayer) {
     map.mapType = ymk.MapType.VectorMap;
     final isSatellite = initialLayer == MapLayer.satellite;
@@ -276,9 +808,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           builder.setTileUrlProvider(_satelliteUrlProvider);
           builder.setProjection(ymk.Projections.wgs84Mercator);
           builder.setTileFormat(ymk.TileFormat.Jpg);
-          builder.setZoomRanges(const [
-            ymk.ZoomRangeIdl(zMin: 0, zMax: 20),
-          ]);
+          builder.setZoomRanges(const [ymk.ZoomRangeIdl(zMin: 0, zMax: 20)]);
         },
       );
       _satelliteLayer = map.addTileLayer(
@@ -299,6 +829,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   void _applyMapLayer(MapLayer layer) {
+    final desktop = _desktop;
+    if (desktop != null) {
+      desktop.setMapType(
+        layer == MapLayer.satellite
+            ? ymd.DesktopMapType.hybrid
+            : ymd.DesktopMapType.map,
+      );
+      return;
+    }
     final map = _mapWindow?.map;
     if (map == null || !map.isValid()) return;
     map.mapType = ymk.MapType.VectorMap;
@@ -313,9 +852,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   void _focusSelectedObject(Selection selection) {
-    if (!mounted) return;
-    final map = _mapWindow?.map;
-    if (map == null || !map.isValid()) return;
+    if (!mounted || !_hasMap) return;
+    if (selection is SectionSelection) {
+      _fitToSection(selection.id);
+      return;
+    }
 
     final allManholes = ref.read(manholesProvider).asData?.value ?? const {};
     final allPipes = ref.read(pipesProvider).asData?.value ?? const {};
@@ -349,17 +890,41 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
   }
 
-  void _moveCamera(ymk.CameraPosition position, {bool animated = true}) {
-    final map = _mapWindow?.map;
-    if (map == null || !map.isValid()) return;
+  void _moveCamera(
+    ymk.CameraPosition position, {
+    bool animated = true,
+    double duration = 0.4,
+  }) {
     final prevBucket = MapObjectsLayer.zoomBucket(_currentZoom);
     final nextBucket = MapObjectsLayer.zoomBucket(position.zoom);
+    final desktop = _desktop;
+    if (desktop != null) {
+      desktop.moveCamera(
+        ymd.CameraUpdate.newCameraPosition(
+          ymd.CameraPosition(
+            target: ymd.Point(
+              latitude: position.target.latitude,
+              longitude: position.target.longitude,
+            ),
+            zoom: position.zoom,
+          ),
+        ),
+        duration: Duration(
+          milliseconds: animated ? (duration * 1000).round() : 0,
+        ),
+      );
+      _currentZoom = position.zoom;
+      if (prevBucket != nextBucket) _syncMapObjects();
+      return;
+    }
+    final map = _mapWindow?.map;
+    if (map == null || !map.isValid()) return;
     if (animated) {
       map.move(
         position,
-        animation: const ymk.Animation(
+        animation: ymk.Animation(
           type: ymk.AnimationType.Smooth,
-          duration: 0.4,
+          duration: duration,
         ),
       );
     } else {
@@ -371,10 +936,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-
   Future<void> _applyInitialCamera(Map<String, Manhole> manholes) async {
+    if (_initialCameraApplied) return;
+    if (_desktop != null) {
+      _initialCameraApplied = true;
+      final camera = _cameraFor(
+        manholes.values.map((m) => (lat: m.lat, lng: m.lng)),
+        insetTop: 150,
+        insetBottom: 60,
+        maxZoom: 16,
+      );
+      _moveCamera(
+        camera ??
+            const ymk.CameraPosition(
+              ymk.Point(latitude: _qarshiLat, longitude: _qarshiLng),
+              zoom: _defaultZoom,
+              azimuth: 0,
+              tilt: 0,
+            ),
+        animated: false,
+      );
+      return;
+    }
     final map = _mapWindow?.map;
-    if (map == null || !map.isValid() || _initialCameraApplied) return;
+    if (map == null || !map.isValid()) return;
     _initialCameraApplied = true;
 
     if (manholes.isNotEmpty) {
@@ -527,10 +1112,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final controller = _layerController;
     if (controller == null) return;
 
-    final allManholes = ref.read(manholesProvider).asData?.value ?? const {};
-    final allPipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final data = _networkData();
+    final allManholes = data.manholes;
+    final allPipes = data.pipes;
     final activeStatuses = ref.read(statusFilterProvider);
     final mapState = ref.read(mapControllerProvider);
+    final traceId = ref.read(traceProvider);
+    final trace = ref.read(timelineProvider) != null
+        ? null
+        : _sectionTrace(mapState, allPipes) ??
+              (traceId != null
+                  ? NetworkGraph.trace(traceId, allPipes.values)
+                  : null);
 
     controller.animationsEnabled = !MediaQuery.disableAnimationsOf(context);
     controller.sync(
@@ -540,8 +1133,106 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       selection: mapState.selection,
       mode: mapState.mode,
       zoom: _currentZoom,
+      trace: trace,
+      hiddenManholeIds: data.hidden,
     );
     _updateAnimationLoop();
+  }
+
+  // ── Sections (uchastkalar) ────────────────────────────────────────────
+
+  /// Pipes being picked, or the selected section, drawn as a glow.
+  FlowTrace? _sectionTrace(MapState s, Map<String, Pipe> pipes) {
+    final Set<String> pipeIds;
+    final Set<String> extra;
+    switch ((s.mode, s.selection)) {
+      case (final SectionMode m, _):
+        pipeIds = m.pipeIds;
+        extra = {?m.startId, ?m.endId};
+      case (ViewMode(), SectionSelection(:final id)):
+        pipeIds = ref.read(sectionPipesProvider).asData?.value[id] ?? const {};
+        extra =
+            ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+      default:
+        return null;
+    }
+    return FlowTrace(
+      originId: '',
+      downstreamPipes: pipeIds,
+      downstreamManholes: SectionStats.manholesOf(pipeIds, pipes, extra: extra),
+      upstreamPipes: const {},
+      upstreamManholes: const {},
+    );
+  }
+
+  void _fitToSection(String id) {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final ids = ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+    _fitTo([
+      for (final m in ids)
+        if (manholes[m] case final mh?) (lat: mh.lat, lng: mh.lng),
+    ]);
+  }
+
+  ({Set<String> manholeIds, SectionStats stats}) _pickedSection(
+    SectionMode mode,
+    Map<String, Pipe> pipes,
+  ) {
+    final manholeIds = SectionStats.manholesOf(
+      mode.pipeIds,
+      pipes,
+      extra: {?mode.startId, ?mode.endId},
+    );
+    return (
+      manholeIds: manholeIds,
+      stats: SectionStats.of(
+        pipeIds: mode.pipeIds,
+        manholeCount: manholeIds.length,
+        allPipes: pipes,
+      ),
+    );
+  }
+
+  Future<void> _finishSection(SectionMode mode) async {
+    final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final picked = _pickedSection(mode, pipes);
+    final section = mode.sectionId == null
+        ? null
+        : ref.read(sectionsProvider).asData?.value[mode.sectionId];
+    final id = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => SectionFormPage(
+          section: section,
+          pipeIds: mode.pipeIds,
+          manholeIds: picked.manholeIds,
+          stats: picked.stats,
+        ),
+      ),
+    );
+    if (id == null || !mounted) return;
+    ref
+        .read(mapControllerProvider.notifier)
+        .onFormSaved(selection: SectionSelection(id));
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    _fitTo([
+      for (final m in picked.manholeIds)
+        if (manholes[m] case final mh?) (lat: mh.lat, lng: mh.lng),
+    ]);
+  }
+
+  Future<void> _openSections({required bool isAdmin}) async {
+    final notifier = ref.read(mapControllerProvider.notifier);
+    final id = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => SectionsScreen(
+          isAdmin: isAdmin,
+          onCreate: () => notifier.startSection(isAdmin: isAdmin),
+        ),
+      ),
+    );
+    if (id == null || !mounted) return;
+    ref.read(traceProvider.notifier).clear();
+    notifier.select(SectionSelection(id));
   }
 
   Future<void> _saveMoveManhole(MoveManholeMode mode) async {
@@ -549,29 +1240,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     try {
       final moved = await ref
           .read(manholeRepoProvider)
-          .move(
-            mode.manholeId,
-            lat: mode.newLat,
-            lng: mode.newLng,
-          );
+          .move(mode.manholeId, lat: mode.newLat, lng: mode.newLng);
       final currentManholes =
           ref.read(manholesProvider).asData?.value ?? const {};
-      ref
-          .read(pipeRepoProvider)
-          .recalculateForMovedManhole(
-            moved,
-            {...currentManholes, moved.id: moved},
-          );
+      ref.read(pipeRepoProvider).recalculateForMovedManhole(moved, {
+        ...currentManholes,
+        moved.id: moved,
+      });
       if (!mounted) return;
       ref.read(mapControllerProvider.notifier).completeMoveManhole();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kolodets joyi saqlandi')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Kolodets joyi saqlandi')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mapErrorToMessage(e))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(mapErrorToMessage(e))));
     } finally {
       if (mounted) {
         setState(() => _savingMove = false);
@@ -664,7 +1349,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             isAdmin: isAdmin,
           ),
           onSelectPipe: (pipeId) => notifier.select(PipeSelection(pipeId)),
+          onSelectManhole: (mid) => notifier.select(ManholeSelection(mid)),
           onDeleted: notifier.clearSelection,
+          onTrace: () {
+            ref.read(traceProvider.notifier).show(id);
+            notifier.clearSelection();
+          },
         );
       case PipeSelection(:final id):
         final pipe = pipes[id];
@@ -679,6 +1369,32 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           onEdit: () => notifier.openEditPipeForm(id, isAdmin: isAdmin),
           onSelectManhole: (manholeId) =>
               notifier.select(ManholeSelection(manholeId)),
+          onSelectSection: (sectionId) =>
+              notifier.select(SectionSelection(sectionId)),
+          onDeleted: notifier.clearSelection,
+        );
+      case SectionSelection(:final id):
+        final section = ref.read(sectionsProvider).asData?.value[id];
+        if (section == null) return null;
+        final pipeIds =
+            ref.read(sectionPipesProvider).asData?.value[id] ?? const {};
+        final manholeIds =
+            ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+        return (context, scrollController) => SectionDetails(
+          key: ValueKey('details_section_$id'),
+          section: section,
+          pipeIds: pipeIds,
+          manholeIds: manholeIds,
+          allPipes: pipes,
+          allManholes: manholes,
+          isAdmin: isAdmin,
+          scrollController: scrollController,
+          onClose: notifier.clearSelection,
+          onEditPipes: () => notifier.startSection(
+            sectionId: id,
+            pipeIds: pipeIds,
+            isAdmin: isAdmin,
+          ),
           onDeleted: notifier.clearSelection,
         );
     }
@@ -693,19 +1409,55 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final mapState = ref.watch(mapControllerProvider);
     final mapLayer = ref.watch(mapLayerProvider);
     final activeStatuses = ref.watch(statusFilterProvider);
+    final traceId = ref.watch(traceProvider);
+    final timeline = ref.watch(timelineProvider);
+    ref.watch(statusEventsProvider);
+    ref.watch(sectionsProvider);
+    ref.watch(sectionPipesProvider);
+    ref.watch(sectionManholesProvider);
+
+    ref.listen(sectionPipesProvider, (_, _) => _syncMapObjects());
+    ref.listen(sectionManholesProvider, (prev, next) {
+      _syncMapObjects();
+      // A section opened from the list before its membership loaded.
+      final sel = ref.read(mapControllerProvider).selection;
+      if (prev?.asData == null && sel is SectionSelection) {
+        _fitToSection(sel.id);
+      }
+    });
 
     ref.listen<MapLayer>(mapLayerProvider, (_, next) {
       _applyMapLayer(next);
     });
 
+    ref.listen<MapAppearance>(mapAppearanceProvider, (_, next) {
+      _applyAppearance(next);
+    });
+
+    ref.listen<String?>(traceProvider, (_, next) {
+      _syncMapObjects();
+      if (next == null) return;
+      final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+      final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+      final t = NetworkGraph.trace(next, pipes.values);
+      _fitTo([
+        for (final id in {next, ...t.downstreamManholes, ...t.upstreamManholes})
+          if (manholes[id] != null)
+            (lat: manholes[id]!.lat, lng: manholes[id]!.lng),
+      ]);
+    });
+
+    ref.listen<TimelineState?>(timelineProvider, _onTimelineChanged);
+
     ref.listen<MapState>(mapControllerProvider, (prev, next) {
       if (next.snackbarMessage != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(next.snackbarMessage!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(next.snackbarMessage!)));
         ref.read(mapControllerProvider.notifier).clearSnackbar();
       }
       _syncMapObjects();
+      _updateRubberBand();
       if (next.selection != null &&
           next.selection != prev?.selection &&
           next.mode is ViewMode &&
@@ -756,14 +1508,17 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       masters: allMasters,
     );
 
-    final detailsBuilder = _buildDetailsBuilder(
-      selection: mapState.selection,
-      mode: mapState.mode,
-      manholes: allManholes,
-      pipes: allPipes,
-      masters: allMasters,
-      isAdmin: isAdmin,
-    );
+    final net = _networkData();
+    final detailsBuilder = timeline != null
+        ? null
+        : _buildDetailsBuilder(
+            selection: mapState.selection,
+            mode: mapState.mode,
+            manholes: allManholes,
+            pipes: allPipes,
+            masters: allMasters,
+            isAdmin: isAdmin,
+          );
 
     final canPopDirectly =
         mapState.mode is ViewMode &&
@@ -789,6 +1544,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         drawer: _TuronNavigationDrawer(
           isAdmin: isAdmin,
           fullName: profile?.fullName,
+          onTimeline: _openTimeline,
+          onReport: _shareReport,
+          onSections: () => _openSections(isAdmin: isAdmin),
           onSignOut: () async {
             await ref.read(authRepoProvider).signOut();
           },
@@ -802,7 +1560,40 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           mapChild: Stack(
             children: [
               Positioned.fill(
-                child: Env.isMapkitConfigured
+                child: Env.isDesktopMapConfigured
+                    ? ymd.YandexMapDesktop(
+                        apiKey: Env.yandexJsApiKey,
+                        lang: 'uz_UZ',
+                        initialCameraPosition: const ymd.CameraPosition(
+                          target: ymd.Point(
+                            latitude: _qarshiLat,
+                            longitude: _qarshiLng,
+                          ),
+                          zoom: _defaultZoom,
+                        ),
+                        onMapCreated: _onDesktopMapCreated,
+                        onMapTap: (p) => ref
+                            .read(mapControllerProvider.notifier)
+                            .onMapTap(p.latitude, p.longitude),
+                        onCameraPositionChanged: (pos, _) => _onCameraChanged(
+                          pos.target.latitude,
+                          pos.target.longitude,
+                          pos.zoom,
+                        ),
+                        onUserAction: _onUserMovedMap,
+                        onObjectTap: (id, _) =>
+                            _desktopLayer?.handleObjectTap(id),
+                        onObjectDrag: (id, p) => _desktopLayer
+                            ?.handleObjectDrag(id, p.latitude, p.longitude),
+                        onObjectDragEnd: (id, p) =>
+                            _desktopLayer?.handleObjectDrag(
+                              id,
+                              p.latitude,
+                              p.longitude,
+                              end: true,
+                            ),
+                      )
+                    : Env.isMapkitConfigured
                     ? YandexMap(
                         onMapCreated: _onMapCreated,
                         platformViewType: PlatformViewType.Hybrid,
@@ -848,14 +1639,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             const _BrandPill(),
                             const Spacer(),
                             MapRoundButton(
+                              icon: Icons.search_rounded,
+                              tooltip: 'Qidirish',
+                              onPressed: _openSearch,
+                            ),
+                            const SizedBox(width: 10),
+                            MapRoundButton(
                               icon: mapLayer == MapLayer.scheme
-                                  ? Icons.satellite_alt_outlined
-                                  : Icons.map_outlined,
-                              tooltip: mapLayer == MapLayer.scheme
-                                  ? 'Sun\'iy yo\'ldosh qatlamiga o\'tish'
-                                  : 'Sxema qatlamiga o\'tish',
-                              onPressed: () =>
-                                  ref.read(mapLayerProvider.notifier).toggle(),
+                                  ? Icons.layers_outlined
+                                  : Icons.satellite_alt_outlined,
+                              tooltip: 'Xarita ko\'rinishi',
+                              onPressed: () => showModalBottomSheet<void>(
+                                context: context,
+                                builder: (_) => const MapStyleSheet(),
+                              ),
                             ),
                             const SizedBox(width: 10),
                             MapRoundButton(
@@ -905,11 +1702,28 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                       .read(mapControllerProvider.notifier)
                                       .cancelMode(),
                                 )
+                              : traceId != null &&
+                                    timeline == null &&
+                                    allManholes[traceId] != null
+                              ? TraceLegendCard(
+                                  key: ValueKey('trace_$traceId'),
+                                  origin: allManholes[traceId]!,
+                                  trace: NetworkGraph.trace(
+                                    traceId,
+                                    allPipes.values,
+                                  ),
+                                  pipes: allPipes,
+                                  manholes: allManholes,
+                                  onClose: () =>
+                                      ref.read(traceProvider.notifier).clear(),
+                                )
                               : NetworkStatsCard(
                                   key: const ValueKey('stats'),
                                   stats: NetworkStats.from(
-                                    allManholes.values,
-                                    allPipes.values,
+                                    net.manholes.values.where(
+                                      (m) => !net.hidden.contains(m.id),
+                                    ),
+                                    net.pipes.values,
                                   ),
                                 ),
                         ),
@@ -941,8 +1755,60 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   ),
                 ),
               ),
+              if (mapState.mode is AddPipeMode &&
+                  (mapState.mode as AddPipeMode).fromManholeId != null)
+                Positioned.fill(
+                  child: RubberBandOverlay(
+                    info: _rubberInfo,
+                    onConnect: (id) => ref
+                        .read(mapControllerProvider.notifier)
+                        .onManholeTap(id, existingPipes: allPipes.values),
+                  ),
+                ),
+              if (timeline != null)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  child: SafeArea(
+                    top: false,
+                    child: TimelinePanel(
+                      timeline: timeline,
+                      shownMeters: net.pipes.values.fold(
+                        0.0,
+                        (sum, p) => sum + p.lengthM,
+                      ),
+                      totalMeters: allPipes.values.fold(
+                        0.0,
+                        (sum, p) => sum + p.lengthM,
+                      ),
+                    ),
+                  ),
+                ),
+              if (mapState.mode case final SectionMode sm)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  child: SafeArea(
+                    top: false,
+                    child: SectionPickPanel(
+                      stats: _pickedSection(sm, allPipes).stats,
+                      onUndoAll: sm.pipeIds.isEmpty && sm.startId == null
+                          ? null
+                          : () => ref
+                                .read(mapControllerProvider.notifier)
+                                .startSection(sectionId: sm.sectionId),
+                      onNext: sm.pipeIds.isEmpty
+                          ? null
+                          : () => _finishSection(sm),
+                    ),
+                  ),
+                ),
               // Bottom-right: my location + admin speed dial
-              if (mapState.activeForm == null)
+              if (mapState.activeForm == null &&
+                  timeline == null &&
+                  mapState.mode is! SectionMode)
                 Positioned(
                   right: 16,
                   bottom: 16,
@@ -970,6 +1836,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           const SizedBox(height: 14),
                           SpeedDial(
                             actions: [
+                              SpeedDialAction(
+                                icon: Icons.route_rounded,
+                                label: 'Uchastka',
+                                onPressed: () => ref
+                                    .read(mapControllerProvider.notifier)
+                                    .startSection(isAdmin: isAdmin),
+                              ),
                               SpeedDialAction(
                                 icon: Icons.timeline_rounded,
                                 label: 'Quvur',
@@ -1003,17 +1876,38 @@ class _TuronNavigationDrawer extends StatelessWidget {
   final bool isAdmin;
   final String? fullName;
   final Future<void> Function() onSignOut;
+  final VoidCallback onTimeline;
+  final Future<void> Function() onReport;
+  final VoidCallback onSections;
 
   const _TuronNavigationDrawer({
     required this.isAdmin,
     required this.fullName,
     required this.onSignOut,
+    required this.onTimeline,
+    required this.onReport,
+    required this.onSections,
   });
 
   @override
   Widget build(BuildContext context) {
     final destinations = <({String label, IconData icon, String? route})>[
       (label: 'Xarita', icon: Icons.map_outlined, route: null),
+      (
+        label: 'Uchastkalar',
+        icon: Icons.route_rounded,
+        route: '__sections__',
+      ),
+      (
+        label: 'Qurilish taymlayni',
+        icon: Icons.history_rounded,
+        route: '__timeline__',
+      ),
+      (
+        label: 'Hisobot (PDF)',
+        icon: Icons.picture_as_pdf_outlined,
+        route: '__report__',
+      ),
       if (isAdmin) ...[
         (
           label: 'Foydalanuvchilar',
@@ -1042,6 +1936,18 @@ class _TuronNavigationDrawer extends StatelessWidget {
           await onSignOut();
           return;
         }
+        if (item.route == '__sections__') {
+          onSections();
+          return;
+        }
+        if (item.route == '__timeline__') {
+          onTimeline();
+          return;
+        }
+        if (item.route == '__report__') {
+          await onReport();
+          return;
+        }
         if (context.mounted) {
           context.push(item.route!);
         }
@@ -1054,17 +1960,17 @@ class _TuronNavigationDrawer extends StatelessWidget {
             children: [
               Text(
                 'Turon — Kanalizatsiya GIS',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               if (fullName != null && fullName!.trim().isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
                   fullName!,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.grey.shade700,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey.shade700),
                 ),
               ],
             ],

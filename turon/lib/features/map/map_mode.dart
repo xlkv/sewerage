@@ -12,6 +12,12 @@ sealed class MapMode {
     AddPipeMode(fromManholeId: null) => '1-kolodetsni tanlang',
     AddPipeMode(fromManholeId: _?) => '2-kolodetsni tanlang',
     MoveManholeMode() => 'Kolodetsni yangi joyga suring \u2192 Saqlash',
+    SectionMode(startId: null, pipeIds: final p) when p.isEmpty =>
+      'Uchastka boshidagi kolodetsni tanlang',
+    SectionMode(endId: null, pipeIds: final p) when p.isEmpty =>
+      'Uchastka oxiridagi kolodetsni tanlang',
+    SectionMode() =>
+      'Quvurni bosing: qo\'shish / olib tashlash. Kolodets: davom ettirish',
   };
 }
 
@@ -98,6 +104,54 @@ class MoveManholeMode extends MapMode {
       'MoveManholeMode(manholeId: $manholeId, newLat: $newLat, newLng: $newLng)';
 }
 
+/// Picking the pipes of a section (uchastka): start manhole, end manhole
+/// (the path between them is added), then pipes are toggled by tap.
+class SectionMode extends MapMode {
+  /// Section being edited; null = new.
+  final String? sectionId;
+  final String? startId;
+  final String? endId;
+  final Set<String> pipeIds;
+
+  const SectionMode({
+    this.sectionId,
+    this.startId,
+    this.endId,
+    this.pipeIds = const {},
+  });
+
+  SectionMode copyWith({String? startId, String? endId, Set<String>? pipeIds}) =>
+      SectionMode(
+        sectionId: sectionId,
+        startId: startId ?? this.startId,
+        endId: endId ?? this.endId,
+        pipeIds: pipeIds ?? this.pipeIds,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SectionMode &&
+          other.sectionId == sectionId &&
+          other.startId == startId &&
+          other.endId == endId &&
+          setEquals(other.pipeIds, pipeIds);
+
+  @override
+  int get hashCode => Object.hash(
+    SectionMode,
+    sectionId,
+    startId,
+    endId,
+    Object.hashAllUnordered(pipeIds),
+  );
+
+  @override
+  String toString() =>
+      'SectionMode(section: $sectionId, start: $startId, end: $endId, '
+      'pipes: ${pipeIds.length})';
+}
+
 @immutable
 sealed class Selection {
   const Selection();
@@ -131,6 +185,21 @@ class PipeSelection extends Selection {
 
   @override
   String toString() => 'PipeSelection($id)';
+}
+
+class SectionSelection extends Selection {
+  final String id;
+  const SectionSelection(this.id);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is SectionSelection && other.id == id;
+
+  @override
+  int get hashCode => Object.hash(SectionSelection, id);
+
+  @override
+  String toString() => 'SectionSelection($id)';
 }
 
 /// Active form opened from a map mode or details card.
@@ -194,8 +263,7 @@ class CreatePipeForm extends ActiveForm {
   int get hashCode => Object.hash(CreatePipeForm, fromManholeId, toManholeId);
 
   @override
-  String toString() =>
-      'CreatePipeForm(from: $fromManholeId, to: $toManholeId)';
+  String toString() => 'CreatePipeForm(from: $fromManholeId, to: $toManholeId)';
 }
 
 class EditPipeForm extends ActiveForm {

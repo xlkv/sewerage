@@ -165,6 +165,10 @@ class _PipeFormState extends ConsumerState<PipeForm> {
           code: code,
           fromManholeId: _fromManholeId,
           toManholeId: _toManholeId,
+          // Bends follow the flow direction; reverse them when swapped.
+          path: _fromManholeId == widget.existing!.toManholeId
+              ? widget.existing!.reversedPath
+              : null,
           status: _status,
           diameterMm: diameterMm,
           lengthManualM: lengthManualM,

@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../data/models/work_status.dart';
+import 'cross_section.dart';
+import 'insert_manhole_sheet.dart';
 import '../../shared/widgets/details_parts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,6 +27,12 @@ class ManholeDetails extends ConsumerStatefulWidget {
   final VoidCallback onDeleted;
   final ScrollController? scrollController;
 
+  /// Shows the flow trace (downstream/upstream) of this manhole.
+  final VoidCallback? onTrace;
+
+  /// Selects another manhole (e.g. one just inserted on a pipe).
+  final void Function(String manholeId)? onSelectManhole;
+
   const ManholeDetails({
     super.key,
     required this.manhole,
@@ -37,6 +46,8 @@ class ManholeDetails extends ConsumerStatefulWidget {
     required this.onSelectPipe,
     required this.onDeleted,
     this.scrollController,
+    this.onTrace,
+    this.onSelectManhole,
   });
 
   @override
@@ -86,6 +97,30 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
     }
   }
 
+  Future<void> _changeStatus(WorkStatus status) async {
+    try {
+      await ref
+          .read(manholeRepoProvider)
+          .update(widget.manhole.id, status: status);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapErrorToMessage(e))),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> _insertOnPipe() async {
+    final id = await showInsertManholeSheet(
+      context,
+      manhole: widget.manhole,
+      allManholes: widget.allManholes,
+      allPipes: widget.allPipes,
+    );
+    if (id != null && mounted) widget.onSelectManhole?.call(id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = widget.manhole;
@@ -111,6 +146,7 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
           status: m.status,
           icon: Icons.radio_button_checked_rounded,
           onClose: widget.onClose,
+          onStatusChange: widget.isAdmin ? _changeStatus : null,
         ),
         const SizedBox(height: 16),
         MetricGrid(
@@ -127,6 +163,20 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
               label: 'Diametr',
               value: m.diameterM != null
                   ? '${m.diameterM!.toStringAsFixed(2)} m'
+                  : '—',
+            ),
+            MetricData(
+              icon: Icons.landscape_outlined,
+              label: 'Yer sathi',
+              value: m.groundElev != null
+                  ? '+${m.groundElev!.toStringAsFixed(2)} m'
+                  : '—',
+            ),
+            MetricData(
+              icon: Icons.vertical_align_bottom_rounded,
+              label: 'Quvur osti',
+              value: m.invertElev != null
+                  ? '${m.invertElev!.toStringAsFixed(2)} m'
                   : '—',
             ),
             MetricData(
@@ -150,6 +200,24 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
               style: const TextStyle(color: AppColors.muted),
             ),
           ),
+        if (widget.onTrace != null) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: widget.onTrace,
+            icon: const Icon(Icons.water_rounded, size: 18),
+            label: const Text('Oqim izini ko\'rsatish'),
+          ),
+        ],
+        const SectionTitle('Ko\'ndalang kesim'),
+        ManholeCrossSection(
+          depthM: m.heightM,
+          diameterM: m.diameterM,
+          groundElev: m.groundElev,
+          invertElev: m.invertElev,
+          status: m.status,
+          incoming: incomingPipes.map(CrossSectionPipe.of).toList(),
+          outgoing: outgoingPipes.map(CrossSectionPipe.of).toList(),
+        ),
         if (m.note != null && m.note!.trim().isNotEmpty) ...[
           const SectionTitle('Izoh'),
           Text(m.note!),
@@ -196,6 +264,14 @@ class _ManholeDetailsState extends ConsumerState<ManholeDetails> {
               ),
             ],
           ),
+          if (outgoingPipes.isNotEmpty || incomingPipes.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _deleting ? null : _insertOnPipe,
+              icon: const Icon(Icons.add_location_alt_outlined, size: 18),
+              label: const Text('Oraliq kolodets qo\'shish'),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(
             children: [

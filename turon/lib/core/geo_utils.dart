@@ -106,7 +106,9 @@ class GeoUtils {
                   c *
                       sinSigma *
                       (cos2SigmaM +
-                          c * cosSigma * (-1.0 + 2.0 * cos2SigmaM * cos2SigmaM)));
+                          c *
+                              cosSigma *
+                              (-1.0 + 2.0 * cos2SigmaM * cos2SigmaM)));
       if ((lambda - lambdaPrev).abs() <= 1e-12) break;
     }
 
@@ -168,6 +170,99 @@ class GeoUtils {
   }
 
   /// Midpoint between two coordinates (arithmetic mean suitable for short city segments).
+  /// Point at [fraction] (0..1) of the polyline's length, with the bearing
+  /// of the segment it falls on.
+  static ({double lat, double lng, double bearing}) alongPolyline(
+    List<({double lat, double lng})> pts,
+    double fraction,
+  ) {
+    if (pts.length < 2) {
+      final p = pts.isEmpty ? (lat: 0.0, lng: 0.0) : pts.first;
+      return (lat: p.lat, lng: p.lng, bearing: 0.0);
+    }
+    final lengths = <double>[];
+    var total = 0.0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      final d = haversineMeters(
+        pts[i].lat,
+        pts[i].lng,
+        pts[i + 1].lat,
+        pts[i + 1].lng,
+      );
+      lengths.add(d);
+      total += d;
+    }
+    final target = total * fraction.clamp(0.0, 1.0);
+    var acc = 0.0;
+    for (var i = 0; i < lengths.length; i++) {
+      if (acc + lengths[i] >= target || i == lengths.length - 1) {
+        final t = lengths[i] == 0
+            ? 0.0
+            : ((target - acc) / lengths[i]).clamp(0.0, 1.0);
+        return (
+          lat: pts[i].lat + (pts[i + 1].lat - pts[i].lat) * t,
+          lng: pts[i].lng + (pts[i + 1].lng - pts[i].lng) * t,
+          bearing: bearingDegrees(
+            pts[i].lat,
+            pts[i].lng,
+            pts[i + 1].lat,
+            pts[i + 1].lng,
+          ),
+        );
+      }
+      acc += lengths[i];
+    }
+    final last = pts.last;
+    return (lat: last.lat, lng: last.lng, bearing: 0.0);
+  }
+
+  /// Splits a polyline at [meters] from its first point, measured along the
+  /// line. [before] / [after] are the interior vertices on each side of the
+  /// split point (end points excluded), in the polyline's direction.
+  static ({
+    double lat,
+    double lng,
+    List<List<double>> before,
+    List<List<double>> after,
+  })
+  splitPolyline(List<({double lat, double lng})> pts, double meters) {
+    var acc = 0.0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      final a = pts[i], b = pts[i + 1];
+      final d = haversineMeters(a.lat, a.lng, b.lat, b.lng);
+      if (acc + d >= meters || i == pts.length - 2) {
+        final t = d == 0 ? 0.0 : ((meters - acc) / d).clamp(0.0, 1.0);
+        return (
+          lat: a.lat + (b.lat - a.lat) * t,
+          lng: a.lng + (b.lng - a.lng) * t,
+          before: [
+            for (var j = 1; j <= i; j++) [pts[j].lat, pts[j].lng],
+          ],
+          after: [
+            for (var j = i + 1; j < pts.length - 1; j++) [pts[j].lat, pts[j].lng],
+          ],
+        );
+      }
+      acc += d;
+    }
+    final p = pts.isEmpty ? (lat: 0.0, lng: 0.0) : pts.first;
+    return (lat: p.lat, lng: p.lng, before: const [], after: const []);
+  }
+
+  /// Length (m) of a polyline.
+  static double polylineMeters(List<({double lat, double lng})> pts) {
+    var total = 0.0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      total += haversineMeters(
+        pts[i].lat,
+        pts[i].lng,
+        pts[i + 1].lat,
+        pts[i + 1].lng,
+      );
+    }
+    return total;
+  }
+
   static ({double lat, double lng}) midpoint(
     double lat1,
     double lng1,
@@ -179,12 +274,8 @@ class GeoUtils {
 
   /// Computes bounding box (southWestLat, southWestLng, northEastLat, northEastLng)
   /// for a list of (lat, lng) coordinates. Returns null if points is empty.
-  static ({
-    double minLat,
-    double minLng,
-    double maxLat,
-    double maxLng,
-  })? boundingBox(Iterable<({double lat, double lng})> points) {
+  static ({double minLat, double minLng, double maxLat, double maxLng})?
+  boundingBox(Iterable<({double lat, double lng})> points) {
     final iterator = points.iterator;
     if (!iterator.moveNext()) return null;
 

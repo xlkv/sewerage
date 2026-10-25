@@ -20,10 +20,7 @@ class NetworkStats {
 
   double get totalMeters => meters.values.fold(0.0, (a, b) => a + b);
 
-  factory NetworkStats.from(
-    Iterable<Manhole> manholes,
-    Iterable<Pipe> pipes,
-  ) {
+  factory NetworkStats.from(Iterable<Manhole> manholes, Iterable<Pipe> pipes) {
     final meters = {for (final s in WorkStatus.values) s: 0.0};
     final pipeCounts = {for (final s in WorkStatus.values) s: 0};
     final manholeCounts = {for (final s in WorkStatus.values) s: 0};

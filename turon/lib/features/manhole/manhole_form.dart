@@ -41,7 +41,23 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
   late final TextEditingController _codeController;
   late final TextEditingController _heightController;
   late final TextEditingController _diameterController;
+  late final TextEditingController _groundController;
+  late final TextEditingController _invertController;
   late final TextEditingController _noteController;
+
+  /// Depth = ground − invert when both elevations are entered.
+  double? get _derivedDepth {
+    final g = FormValidators.parseOptionalDecimal(_groundController.text);
+    final i = FormValidators.parseOptionalDecimal(_invertController.text);
+    if (g == null || i == null || g <= i) return null;
+    return double.parse((g - i).toStringAsFixed(2));
+  }
+
+  void _onElevationChanged() {
+    final d = _derivedDepth;
+    if (d != null) _heightController.text = d.toStringAsFixed(2);
+    setState(() {});
+  }
 
   late WorkStatus _status;
   String? _selectedMasterId;
@@ -59,6 +75,12 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
     _diameterController = TextEditingController(
       text: e?.diameterM != null ? e!.diameterM.toString() : '',
     );
+    _groundController = TextEditingController(
+      text: e?.groundElev?.toStringAsFixed(2) ?? '',
+    );
+    _invertController = TextEditingController(
+      text: e?.invertElev?.toStringAsFixed(2) ?? '',
+    );
     _noteController = TextEditingController(text: e?.note ?? '');
     _status = e?.status ?? WorkStatus.planned;
     _selectedMasterId = e?.masterId;
@@ -68,6 +90,8 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
   void dispose() {
     _codeController.dispose();
     _heightController.dispose();
+    _groundController.dispose();
+    _invertController.dispose();
     _diameterController.dispose();
     _noteController.dispose();
     super.dispose();
@@ -87,6 +111,12 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
     final diameterM = FormValidators.parseOptionalDecimal(
       _diameterController.text,
     );
+    final groundElev = FormValidators.parseOptionalDecimal(
+      _groundController.text,
+    );
+    final invertElev = FormValidators.parseOptionalDecimal(
+      _invertController.text,
+    );
     final noteText = _noteController.text.trim();
     final note = noteText.isEmpty ? null : noteText;
 
@@ -101,6 +131,8 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
           status: _status,
           heightM: heightM,
           diameterM: diameterM,
+          groundElev: groundElev,
+          invertElev: invertElev,
           masterId: _selectedMasterId,
           note: note,
         );
@@ -113,6 +145,10 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
           clearHeight: heightM == null,
           diameterM: diameterM,
           clearDiameter: diameterM == null,
+          groundElev: groundElev,
+          clearGroundElev: groundElev == null,
+          invertElev: invertElev,
+          clearInvertElev: invertElev == null,
           masterId: _selectedMasterId,
           clearMaster: _selectedMasterId == null,
           note: note,
@@ -227,11 +263,67 @@ class _ManholeFormState extends ConsumerState<ManholeForm> {
             children: [
               Expanded(
                 child: TextFormField(
-                  controller: _heightController,
+                  key: const ValueKey('manhole_ground_elev'),
+                  controller: _groundController,
                   decoration: const InputDecoration(
-                    labelText: 'Chuqurligi / Balandlik (m)',
+                    labelText: 'Yer sathi (m)',
+                    hintText: 'Masalan: 85.73',
+                    helperText: 'Boltiq tizimi',
+                    prefixText: '+',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                  onChanged: (_) => _onElevationChanged(),
+                  validator: FormValidators.validateElevation,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextFormField(
+                  key: const ValueKey('manhole_invert_elev'),
+                  controller: _invertController,
+                  decoration: const InputDecoration(
+                    labelText: 'Quvur osti (m)',
+                    hintText: 'Masalan: 82.73',
+                    helperText: 'Boltiq tizimi',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                  onChanged: (_) => _onElevationChanged(),
+                  validator: (v) {
+                    final base = FormValidators.validateElevation(v);
+                    if (base != null) return base;
+                    final g = FormValidators.parseOptionalDecimal(
+                      _groundController.text,
+                    );
+                    final i = FormValidators.parseOptionalDecimal(v);
+                    if (g != null && i != null && i >= g) {
+                      return 'Yer sathidan past bo\'lishi kerak';
+                    }
+                    return null;
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: _heightController,
+                  readOnly: _derivedDepth != null,
+                  decoration: InputDecoration(
+                    labelText: 'Chuqurligi (m)',
                     hintText: 'Masalan: 2.5',
-                    border: OutlineInputBorder(),
+                    helperText: _derivedDepth != null
+                        ? 'Otmetkalardan avtomatik'
+                        : null,
                   ),
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,

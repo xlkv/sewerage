@@ -50,6 +50,15 @@ class FormValidators {
 
   /// Validates optional manhole height (m): empty allowed (→ null),
   /// accepts `,` and `.`, max 2 decimals, only rule: `> 0` (no upper limit).
+  /// Optional Baltic-system elevation in metres (e.g. 85.73).
+  static String? validateElevation(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final v = parseOptionalDecimal(value);
+    if (v == null) return 'Raqam kiriting, masalan 85.73';
+    if (v < -500 || v > 9000) return 'Otmetka -500 … 9000 m oralig\'ida bo\'lsin';
+    return null;
+  }
+
   static String? validateManholeHeight(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return null;

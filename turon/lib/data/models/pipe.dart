@@ -10,6 +10,18 @@ double _toDouble(Object? value) {
   return 0;
 }
 
+/// `path` column: interior bend points as [[lat, lng], ...]; null = straight.
+List<List<double>> _pathFromJson(Object? value) {
+  if (value is! List) return const [];
+  return [
+    for (final p in value)
+      if (p is List && p.length >= 2)
+        [(p[0] as num).toDouble(), (p[1] as num).toDouble()],
+  ];
+}
+
+Object? _pathToJson(List<List<double>> path) => path.isEmpty ? null : path;
+
 double? _toNullableDouble(Object? value) {
   if (value == null) return null;
   if (value is num) return value.toDouble();
@@ -34,6 +46,9 @@ abstract class Pipe with _$Pipe {
     @JsonKey(name: 'length_manual_m', fromJson: _toNullableDouble)
     double? lengthManualM,
     @Default(WorkStatus.planned) WorkStatus status,
+    @JsonKey(fromJson: _pathFromJson, toJson: _pathToJson)
+    @Default([])
+    List<List<double>> path,
     String? note,
     @JsonKey(name: 'created_by') String? createdBy,
     @JsonKey(name: 'created_at') DateTime? createdAt,
@@ -47,4 +62,9 @@ abstract class Pipe with _$Pipe {
   double get effectiveLengthM => lengthM;
 
   bool get isManual => lengthManualM != null;
+
+  bool get isCurved => path.isNotEmpty;
+
+  /// Bend points in the opposite flow direction (for swapping from/to).
+  List<List<double>> get reversedPath => path.reversed.toList();
 }

@@ -14,3 +14,17 @@ Dala va ofis xodimlari uchun Android Flutter ilovasi (Supabase + PostGIS + Yande
 ```bash
 flutter run --dart-define-from-file=env/dev.json
 ```
+
+## Windows
+
+The Windows build uses the Yandex Maps **JavaScript API** in a WebView2
+(`packages/yandex_map_desktop`, vendored and extended). It needs its own key:
+developer.tech.yandex.ru → "JavaScript API and HTTP Geocoder", restriction
+"Without restrictions". Put it into `env/dev.json` as `YANDEX_JS_KEY`.
+
+```
+flutter run -d windows --dart-define-from-file=env/dev.json
+flutter build windows --release --dart-define-from-file=env/dev.json
+```
+
+WebView2 Runtime is preinstalled on Windows 10 21H2+ / 11.

@@ -76,6 +76,39 @@ class PipeRepository {
     return created;
   }
 
+  /// Inserts a manhole on [pipeId] at (lat, lng): the pipe is cut in two
+  /// (`split_pipe` RPC). [pathA]/[pathB] are the bend points of the
+  /// from → new and new → to halves. Returns the new manhole id.
+  Future<String> splitPipe(
+    String pipeId, {
+    required double lat,
+    required double lng,
+    required List<List<double>> pathA,
+    required List<List<double>> pathB,
+  }) async {
+    final id = await _client.rpc(
+      'split_pipe',
+      params: {
+        'p_pipe': pipeId,
+        'p_lat': lat,
+        'p_lng': lng,
+        'p_path_a': pathA,
+        'p_path_b': pathB,
+      },
+    );
+    final manholeId = id as String;
+    final rows = await _client
+        .from('pipes')
+        .select()
+        .or('id.eq.$pipeId,from_manhole_id.eq.$manholeId');
+    _store.upsertAll(
+      (rows as List<dynamic>).map(
+        (r) => Pipe.fromJson(r as Map<String, dynamic>),
+      ),
+    );
+    return manholeId;
+  }
+
   Future<Pipe> update(
     String id, {
     String? code,
@@ -87,6 +120,7 @@ class PipeRepository {
     WorkStatus? status,
     String? note,
     bool clearNote = false,
+    List<List<double>>? path,
   }) async {
     // Never send length_auto_m on update (revoked at column level per LLD 1.3)
     final payload = <String, dynamic>{
@@ -109,6 +143,9 @@ class PipeRepository {
       payload['note'] = null;
     } else if (note != null) {
       payload['note'] = note.trim();
+    }
+    if (path != null) {
+      payload['path'] = path.isEmpty ? null : path;
     }
 
     final row = await _client

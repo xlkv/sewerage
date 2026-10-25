@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../data/models/work_status.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/details_parts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,7 @@ import '../../core/geo_utils.dart';
 import '../../data/models/manhole.dart';
 import '../../data/models/pipe.dart';
 import '../../data/repositories/pipe_repo.dart';
+import '../../data/repositories/section_repo.dart';
 import '../../shared/widgets/confirm_dialog.dart';
 
 class PipeDetails extends ConsumerStatefulWidget {
@@ -17,6 +19,7 @@ class PipeDetails extends ConsumerStatefulWidget {
   final VoidCallback onClose;
   final VoidCallback onEdit;
   final void Function(String manholeId) onSelectManhole;
+  final void Function(String sectionId)? onSelectSection;
   final VoidCallback onDeleted;
   final ScrollController? scrollController;
 
@@ -28,6 +31,7 @@ class PipeDetails extends ConsumerStatefulWidget {
     required this.onClose,
     required this.onEdit,
     required this.onSelectManhole,
+    this.onSelectSection,
     required this.onDeleted,
     this.scrollController,
   });
@@ -46,6 +50,7 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
         widget.pipe.id,
         fromManholeId: widget.pipe.toManholeId,
         toManholeId: widget.pipe.fromManholeId,
+        path: widget.pipe.reversedPath,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -112,9 +117,37 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
     }
   }
 
+  Future<void> _changeStatus(WorkStatus status) async {
+    try {
+      await ref.read(pipeRepoProvider).update(widget.pipe.id, status: status);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapErrorToMessage(e))),
+      );
+      rethrow;
+    }
+  }
+
+  /// Slope in ‰ from the manholes' invert levels: (from − to) / length.
+  static String _slopeText(Manhole? from, Manhole? to, Pipe p) {
+    final a = from?.invertElev;
+    final b = to?.invertElev;
+    if (a == null || b == null || p.lengthM <= 0) return '—';
+    final permille = (a - b) / p.lengthM * 1000;
+    return '${permille.toStringAsFixed(1)} ‰';
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = widget.pipe;
+    final allSections = ref.watch(sectionsProvider).asData?.value ?? const {};
+    final membership = ref.watch(sectionPipesProvider).asData?.value ?? const {};
+    final sections = [
+      for (final e in membership.entries)
+        if (e.value.contains(p.id) && allSections[e.key] != null)
+          allSections[e.key]!,
+    ];
     final fromManhole = widget.allManholes[p.fromManholeId];
     final toManhole = widget.allManholes[p.toManholeId];
 
@@ -129,6 +162,7 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
           status: p.status,
           icon: Icons.timeline_rounded,
           onClose: widget.onClose,
+          onStatusChange: widget.isAdmin ? _changeStatus : null,
         ),
         const SizedBox(height: 18),
         Row(
@@ -167,6 +201,11 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
               label: 'Diametr',
               value: '${p.diameterMm} mm',
             ),
+            MetricData(
+              icon: Icons.trending_down_rounded,
+              label: 'Nishab',
+              value: _slopeText(fromManhole, toManhole, p),
+            ),
           ],
         ),
         if (p.isManual)
@@ -189,6 +228,27 @@ class _PipeDetailsState extends ConsumerState<PipeDetails> {
               ],
             ),
           ),
+        if (sections.isNotEmpty) ...[
+          const SectionTitle('Uchastka'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              for (final s in sections)
+                ActionChip(
+                  avatar: Icon(
+                    Icons.route_rounded,
+                    size: 16,
+                    color: AppColors.forStatus(s.status),
+                  ),
+                  label: Text(s.name),
+                  onPressed: widget.onSelectSection == null
+                      ? null
+                      : () => widget.onSelectSection!(s.id),
+                ),
+            ],
+          ),
+        ],
         if (p.note != null && p.note!.trim().isNotEmpty) ...[
           const SectionTitle('Izoh'),
           Text(p.note!),
