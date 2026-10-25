@@ -1,3 +1,10 @@
+## 0.2.1
+
+- Windows: wheel / trackpad-pinch zoom now really anchors at the cursor.
+  `webview_windows` forwards wheel events to the page with the position
+  (0, 0), which zoomed towards the top-left corner; the widget now handles
+  them in Flutter and calls `window.zoomAt` with the real position.
+
 ## 0.2.0
 
 - Wheel zoom now keeps the point under the cursor fixed: computed from the

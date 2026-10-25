@@ -25,7 +25,7 @@ class ManholeRepository {
   ManholeRepository(this._client);
 
   static const String _columns =
-      'id, code, lat, lng, height_m, diameter_m, master_id, status, note, created_by, created_at, updated_at';
+      'id, code, lat, lng, height_m, diameter_m, ground_elev, invert_elev, master_id, status, note, created_by, created_at, updated_at';
 
   Stream<Map<String, Manhole>> watchAll() {
     return _store.watchWithRemote(
@@ -48,12 +48,27 @@ class ManholeRepository {
     return list;
   }
 
+  /// Loads one manhole into the local store (e.g. one created by an RPC,
+  /// before realtime delivers it).
+  Future<Manhole> fetchOne(String id) async {
+    final row = await _client
+        .from('manholes')
+        .select(_columns)
+        .eq('id', id)
+        .single();
+    final m = Manhole.fromJson(row);
+    _store.upsert(m);
+    return m;
+  }
+
   Future<Manhole> create({
     required double lat,
     required double lng,
     String? code,
     double? heightM,
     double? diameterM,
+    double? groundElev,
+    double? invertElev,
     String? masterId,
     WorkStatus status = WorkStatus.planned,
     String? note,
@@ -64,6 +79,8 @@ class ManholeRepository {
       'status': status.toJsonValue(),
       'height_m': ?heightM,
       'diameter_m': ?diameterM,
+      'ground_elev': ?groundElev,
+      'invert_elev': ?invertElev,
       'master_id': ?masterId,
     };
     if (code != null && code.trim().isNotEmpty) {
@@ -92,6 +109,10 @@ class ManholeRepository {
     bool clearHeight = false,
     double? diameterM,
     bool clearDiameter = false,
+    double? groundElev,
+    bool clearGroundElev = false,
+    double? invertElev,
+    bool clearInvertElev = false,
     String? masterId,
     bool clearMaster = false,
     WorkStatus? status,
@@ -114,6 +135,16 @@ class ManholeRepository {
       payload['diameter_m'] = null;
     } else if (diameterM != null) {
       payload['diameter_m'] = diameterM;
+    }
+    if (clearGroundElev) {
+      payload['ground_elev'] = null;
+    } else if (groundElev != null) {
+      payload['ground_elev'] = groundElev;
+    }
+    if (clearInvertElev) {
+      payload['invert_elev'] = null;
+    } else if (invertElev != null) {
+      payload['invert_elev'] = invertElev;
     }
     if (clearMaster) {
       payload['master_id'] = null;

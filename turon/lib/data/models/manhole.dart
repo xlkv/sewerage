@@ -29,6 +29,12 @@ abstract class Manhole with _$Manhole {
     @JsonKey(fromJson: _toDouble) required double lng,
     @JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? heightM,
     @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? diameterM,
+    /// Ground level, Baltic height system (m).
+    @JsonKey(name: 'ground_elev', fromJson: _toNullableDouble)
+    double? groundElev,
+    /// Pipe invert (bottom) level, Baltic height system (m).
+    @JsonKey(name: 'invert_elev', fromJson: _toNullableDouble)
+    double? invertElev,
     @JsonKey(name: 'master_id') String? masterId,
     @Default(WorkStatus.planned) WorkStatus status,
     String? note,

@@ -14,6 +14,7 @@ String buildMapHtml(
   double zoom = 14.0,
   String lang = 'ru_RU',
   List<String> controls = const [],
+  bool flutterWheel = false,
 }) {
   final controlsJs = '[${controls.map((c) => "'$c'").join(',')}]';
   return '''<!DOCTYPE html>
@@ -69,6 +70,7 @@ String buildMapHtml(
     var _ImgLayout = null;
     var _PillLayout = null;
     var _progMove = false;
+    window._flutterWheel = $flutterWheel;
 
     ymaps.ready(function () {
       _map = new ymaps.Map(
@@ -102,24 +104,19 @@ String buildMapHtml(
       _map.behaviors.disable('scrollZoom');
       var _md = document.getElementById('map');
       var _wheelAcc = 0, _tgtZoom = null, _tgtCenter = null, _tgtTimer = null;
-      _md.addEventListener('wheel', function (e) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        var dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
-        _wheelAcc += dy;
-        if (Math.abs(_wheelAcc) < 50) return;
-        var step = _wheelAcc < 0 ? 1 : -1;
-        _wheelAcc = 0;
 
+      // Zoom by [steps] keeping the point at (x, y) (CSS px from the map's
+      // top-left) fixed on screen.
+      function _zoomAt(x, y, steps) {
         var zoom0   = _tgtZoom !== null ? _tgtZoom : _map.getZoom();
         var center0 = _tgtCenter || _map.getCenter();
-        var newZoom = Math.max(2, Math.min(21, Math.round(zoom0) + step));
+        var newZoom = Math.max(2, Math.min(21, Math.round(zoom0) + steps));
         if (newZoom === zoom0) return;
 
         var proj = _map.options.get('projection');
         var rect = _md.getBoundingClientRect();
-        var ox = e.clientX - rect.left - rect.width / 2;
-        var oy = e.clientY - rect.top  - rect.height / 2;
+        var ox = x - rect.width / 2;
+        var oy = y - rect.height / 2;
         var c0 = proj.toGlobalPixels(center0, zoom0);
         var cursorGeo = proj.fromGlobalPixels([c0[0] + ox, c0[1] + oy], zoom0);
         var c1 = proj.toGlobalPixels(cursorGeo, newZoom);
@@ -131,6 +128,34 @@ String buildMapHtml(
         _tgtTimer = setTimeout(function () { _tgtZoom = null; _tgtCenter = null; }, 300);
         _emit({ type: 'userAction' });
         _map.setCenter(newCenter, newZoom, { duration: 180, checkZoomRange: true });
+      }
+
+      function _wheelDelta(dy, x, y) {
+        _wheelAcc += dy;
+        if (Math.abs(_wheelAcc) < 50) return;
+        var steps = _wheelAcc < 0 ? 1 : -1;
+        _wheelAcc = 0;
+        _zoomAt(x, y, steps);
+      }
+
+      // Windows: webview_windows forwards the wheel WITHOUT the cursor
+      // position (always 0,0 = top-left), so Flutter sends us zoomAt()
+      // with the real position instead and native wheel events are ignored.
+      window.zoomAt = function (a) {
+        var rect = _md.getBoundingClientRect();
+        var x = a.w ? a.x * rect.width / a.w : a.x;
+        var y = a.h ? a.y * rect.height / a.h : a.y;
+        if (a.steps) _zoomAt(x, y, a.steps);
+        else _wheelDelta(a.dy || 0, x, y);
+      };
+
+      _md.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (window._flutterWheel) return;
+        var rect = _md.getBoundingClientRect();
+        var dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+        _wheelDelta(dy, e.clientX - rect.left, e.clientY - rect.top);
       }, { passive: false, capture: true });
 
       _map.events.add('click', function (e) {

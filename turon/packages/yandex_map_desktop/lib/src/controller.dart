@@ -30,8 +30,8 @@ class YandexMapDesktopController {
   YandexMapDesktopController({
     required CameraPosition initialPosition,
     required Future<void> Function(String) runJs,
-  }) : _cameraPosition = initialPosition,
-       _runJs = runJs;
+  })  : _cameraPosition = initialPosition,
+        _runJs = runJs;
 
   /// Updates the tracked camera position.
   ///

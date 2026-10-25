@@ -48,23 +48,24 @@ class AppTheme {
   static const String fontFamily = 'Manrope';
 
   static ThemeData get light {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: AppColors.brand,
-      brightness: Brightness.light,
-    ).copyWith(
-      primary: AppColors.brand,
-      onPrimary: Colors.white,
-      primaryContainer: AppColors.brandSoft,
-      onPrimaryContainer: const Color(0xFF134E4A),
-      secondaryContainer: AppColors.brandSoft,
-      onSecondaryContainer: const Color(0xFF134E4A),
-      surface: AppColors.surface,
-      onSurface: AppColors.ink,
-      onSurfaceVariant: AppColors.muted,
-      outline: const Color(0xFFCBD5E1),
-      outlineVariant: AppColors.line,
-      error: AppColors.danger,
-    );
+    final colorScheme =
+        ColorScheme.fromSeed(
+          seedColor: AppColors.brand,
+          brightness: Brightness.light,
+        ).copyWith(
+          primary: AppColors.brand,
+          onPrimary: Colors.white,
+          primaryContainer: AppColors.brandSoft,
+          onPrimaryContainer: const Color(0xFF134E4A),
+          secondaryContainer: AppColors.brandSoft,
+          onSecondaryContainer: const Color(0xFF134E4A),
+          surface: AppColors.surface,
+          onSurface: AppColors.ink,
+          onSurfaceVariant: AppColors.muted,
+          outline: const Color(0xFFCBD5E1),
+          outlineVariant: AppColors.line,
+          error: AppColors.danger,
+        );
 
     final base = ThemeData(
       useMaterial3: true,
@@ -166,7 +167,13 @@ class AppTheme {
       chipTheme: base.chipTheme.copyWith(
         shape: const StadiumBorder(side: BorderSide(color: AppColors.line)),
         selectedColor: AppColors.brandSoft,
-        labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+        // Colour and size are explicit: without them ActionChip labels
+        // rendered invisible.
+        labelStyle: const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+          color: AppColors.ink,
+        ),
       ),
       cardTheme: CardThemeData(
         color: AppColors.surface,

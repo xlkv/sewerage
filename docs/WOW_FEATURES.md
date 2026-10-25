@@ -46,3 +46,14 @@ Asosiy versiya `main` branch'ida saqlangan. Bu branch'da quyidagilar qo'shildi; 
 - Ilova `NetworkLayer` interfeysi orqali ishlaydi: Android'da `MapObjectsLayerController` (MapKit), Windows'da `DesktopNetworkLayer`. Belgilar bir xil kod bilan chiziladi. Faqat quvur ichidagi oqim animatsiyasi Windows'da statik punktir.
 - JS API kaliti: `env/dev.json` → `YANDEX_JS_KEY`.
 - **Taymlayn = qurilish rejasi:** butun tarmoq bittadan chizib boriladi (kolodets → quvur o'sadi → kolodets). Tartib shimoli-g'arbdan boshlanadi va chiziqlar bo'ylab davom etadi. Har bir obyekt o'zining haqiqiy rangida chiqadi. Kamera bir qismga (~340 m) uchadi, uni quradi va keyingi qismga o'tadi. Oxirida butun tarmoqqa uzoqlashadi. Tezlik 1x/2x/4x/8x, standart 2x.
+
+## 2026-10-25: Jamoa takliflari
+- **Windows: kursor ostiga zoom.** `webview_windows` g'ildirak hodisasini (0,0) nuqta bilan yuboradi, shuning uchun zoom chap-yuqoriga ketardi. Endi g'ildirak va touchpad Flutter'da ushlanadi va `window.zoomAt(x, y)` orqali kursor ostidagi nuqta joyida qoladi (`yandex_map_desktop` 0.2.1). Windows'da hali sinalmagan.
+- **Otmetkalar (Boltiq tizimi).** Kolodetsga ikkita qiymat qo'shildi: yer sathi (masalan +85.73) va quvur osti (masalan 82.73). Chuqurlik ulardan avtomatik hisoblanadi (bazadagi trigger). Ikkala qiymat ko'ndalang kesim chizmasida chiqadi. Quvur kartochkasida nishab ‰ ko'rsatiladi: (boshidagi quvur osti − oxiridagi quvur osti) / uzunlik.
+- **Oraliq kolodets.** Kolodets kartochkasi → "Oraliq kolodets qo'shish" (admin): ulangan quvur tanlanadi va masofa kiritiladi (25/50/100 m yoki o'rtasi). Quvur ikkiga bo'linadi: egri chiziq nuqtalari saqlanadi, yangi kolodets quvur statusini oladi, uchastka a'zoligi ko'chadi. Bularning hammasini RPC `split_pipe` bitta tranzaksiyada bajaradi.
+- **Uchastkalar.**
+  - Yaratish: "+" → Uchastka. Boshidagi va oxiridagi kolodets tanlanadi, oradagi eng qisqa yo'l avtomatik qo'shiladi. Quvurni bosish uni qo'shadi yoki olib tashlaydi, yana kolodets bosilsa yo'l davom etadi. Keyin nomi, izoh, status va sanalar kiritiladi.
+  - Kartochkada avtomatik hisoblanadi: uzunlik, quvurlar soni, kolodetslar soni va diametrlar bo'yicha taqsimot.
+  - Fayllar: PNG, JPG yoki PDF, har biri 50 MB gacha. Ular yopiq `section-files` bucket'ida saqlanadi. Rasm ilova ichida ochiladi, PDF esa brauzerda yoki PDF ko'ruvchida.
+  - Ro'yxat: Menyu → Uchastkalar. Quvur kartochkasida u qaysi uchastkaga tegishli ekani ko'rinadi.
+- Baza: `20261025000009_sections_elevations.sql`.

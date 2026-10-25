@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart' as wf;
 import 'package:webview_windows/webview_windows.dart' as ww;
@@ -157,6 +158,7 @@ class _YandexMapDesktopState extends State<YandexMapDesktop> {
       zoom: widget.initialCameraPosition.zoom,
       lang: widget.lang,
       controls: widget.controls,
+      flutterWheel: Platform.isWindows,
     );
 
     try {
@@ -225,6 +227,21 @@ class _YandexMapDesktopState extends State<YandexMapDesktop> {
   // ---------------------------------------------------------------------------
   // Message handling
   // ---------------------------------------------------------------------------
+
+  double _pinchScale = 1;
+
+  void _zoomAt(Offset p, Size size, {double dy = 0, int steps = 0}) {
+    _js(
+      'window.zoomAt(${jsonEncode({
+            'x': p.dx,
+            'y': p.dy,
+            'w': size.width,
+            'h': size.height,
+            'dy': dy,
+            'steps': steps
+          })})',
+    );
+  }
 
   void _handleMessage(String raw) {
     try {
@@ -351,7 +368,29 @@ class _YandexMapDesktopState extends State<YandexMapDesktop> {
     }
 
     if (Platform.isWindows) {
-      return ww.Webview(_wwController!);
+      // webview_windows sends wheel events to the page without a cursor
+      // position, so we zoom from here with the exact position.
+      return LayoutBuilder(
+        builder: (context, constraints) => Listener(
+          onPointerSignal: (signal) {
+            if (signal is PointerScrollEvent) {
+              _zoomAt(signal.localPosition, constraints.biggest,
+                  dy: signal.scrollDelta.dy);
+            }
+          },
+          onPointerPanZoomStart: (_) => _pinchScale = 1,
+          onPointerPanZoomUpdate: (e) {
+            // Trackpad pinch: one zoom level per 1.4x.
+            final ratio = e.scale / _pinchScale;
+            if (ratio > 1.4 || ratio < 1 / 1.4) {
+              _pinchScale = e.scale;
+              _zoomAt(e.localPosition, constraints.biggest,
+                  steps: ratio > 1 ? 1 : -1);
+            }
+          },
+          child: ww.Webview(_wwController!),
+        ),
+      );
     } else {
       return wf.WebViewWidget(controller: _wfController!);
     }

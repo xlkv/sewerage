@@ -15,7 +15,9 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$Manhole {
 
- String get id; String get code;@JsonKey(fromJson: _toDouble) double get lat;@JsonKey(fromJson: _toDouble) double get lng;@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? get heightM;@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? get diameterM;@JsonKey(name: 'master_id') String? get masterId; WorkStatus get status; String? get note;@JsonKey(name: 'created_by') String? get createdBy;@JsonKey(name: 'created_at') DateTime? get createdAt;@JsonKey(name: 'updated_at') DateTime? get updatedAt;
+ String get id; String get code;@JsonKey(fromJson: _toDouble) double get lat;@JsonKey(fromJson: _toDouble) double get lng;@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? get heightM;@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? get diameterM;/// Ground level, Baltic height system (m).
+@JsonKey(name: 'ground_elev', fromJson: _toNullableDouble) double? get groundElev;/// Pipe invert (bottom) level, Baltic height system (m).
+@JsonKey(name: 'invert_elev', fromJson: _toNullableDouble) double? get invertElev;@JsonKey(name: 'master_id') String? get masterId; WorkStatus get status; String? get note;@JsonKey(name: 'created_by') String? get createdBy;@JsonKey(name: 'created_at') DateTime? get createdAt;@JsonKey(name: 'updated_at') DateTime? get updatedAt;
 /// Create a copy of Manhole
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -28,16 +30,16 @@ $ManholeCopyWith<Manhole> get copyWith => _$ManholeCopyWithImpl<Manhole>(this as
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Manhole&&(identical(other.id, id) || other.id == id)&&(identical(other.code, code) || other.code == code)&&(identical(other.lat, lat) || other.lat == lat)&&(identical(other.lng, lng) || other.lng == lng)&&(identical(other.heightM, heightM) || other.heightM == heightM)&&(identical(other.diameterM, diameterM) || other.diameterM == diameterM)&&(identical(other.masterId, masterId) || other.masterId == masterId)&&(identical(other.status, status) || other.status == status)&&(identical(other.note, note) || other.note == note)&&(identical(other.createdBy, createdBy) || other.createdBy == createdBy)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Manhole&&(identical(other.id, id) || other.id == id)&&(identical(other.code, code) || other.code == code)&&(identical(other.lat, lat) || other.lat == lat)&&(identical(other.lng, lng) || other.lng == lng)&&(identical(other.heightM, heightM) || other.heightM == heightM)&&(identical(other.diameterM, diameterM) || other.diameterM == diameterM)&&(identical(other.groundElev, groundElev) || other.groundElev == groundElev)&&(identical(other.invertElev, invertElev) || other.invertElev == invertElev)&&(identical(other.masterId, masterId) || other.masterId == masterId)&&(identical(other.status, status) || other.status == status)&&(identical(other.note, note) || other.note == note)&&(identical(other.createdBy, createdBy) || other.createdBy == createdBy)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,code,lat,lng,heightM,diameterM,masterId,status,note,createdBy,createdAt,updatedAt);
+int get hashCode => Object.hash(runtimeType,id,code,lat,lng,heightM,diameterM,groundElev,invertElev,masterId,status,note,createdBy,createdAt,updatedAt);
 
 @override
 String toString() {
-  return 'Manhole(id: $id, code: $code, lat: $lat, lng: $lng, heightM: $heightM, diameterM: $diameterM, masterId: $masterId, status: $status, note: $note, createdBy: $createdBy, createdAt: $createdAt, updatedAt: $updatedAt)';
+  return 'Manhole(id: $id, code: $code, lat: $lat, lng: $lng, heightM: $heightM, diameterM: $diameterM, groundElev: $groundElev, invertElev: $invertElev, masterId: $masterId, status: $status, note: $note, createdBy: $createdBy, createdAt: $createdAt, updatedAt: $updatedAt)';
 }
 
 
@@ -48,7 +50,7 @@ abstract mixin class $ManholeCopyWith<$Res>  {
   factory $ManholeCopyWith(Manhole value, $Res Function(Manhole) _then) = _$ManholeCopyWithImpl;
 @useResult
 $Res call({
- String id, String code,@JsonKey(fromJson: _toDouble) double lat,@JsonKey(fromJson: _toDouble) double lng,@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? heightM,@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? diameterM,@JsonKey(name: 'master_id') String? masterId, WorkStatus status, String? note,@JsonKey(name: 'created_by') String? createdBy,@JsonKey(name: 'created_at') DateTime? createdAt,@JsonKey(name: 'updated_at') DateTime? updatedAt
+ String id, String code,@JsonKey(fromJson: _toDouble) double lat,@JsonKey(fromJson: _toDouble) double lng,@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? heightM,@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? diameterM,@JsonKey(name: 'ground_elev', fromJson: _toNullableDouble) double? groundElev,@JsonKey(name: 'invert_elev', fromJson: _toNullableDouble) double? invertElev,@JsonKey(name: 'master_id') String? masterId, WorkStatus status, String? note,@JsonKey(name: 'created_by') String? createdBy,@JsonKey(name: 'created_at') DateTime? createdAt,@JsonKey(name: 'updated_at') DateTime? updatedAt
 });
 
 
@@ -65,7 +67,7 @@ class _$ManholeCopyWithImpl<$Res>
 
 /// Create a copy of Manhole
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? code = null,Object? lat = null,Object? lng = null,Object? heightM = freezed,Object? diameterM = freezed,Object? masterId = freezed,Object? status = null,Object? note = freezed,Object? createdBy = freezed,Object? createdAt = freezed,Object? updatedAt = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? code = null,Object? lat = null,Object? lng = null,Object? heightM = freezed,Object? diameterM = freezed,Object? groundElev = freezed,Object? invertElev = freezed,Object? masterId = freezed,Object? status = null,Object? note = freezed,Object? createdBy = freezed,Object? createdAt = freezed,Object? updatedAt = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,code: null == code ? _self.code : code // ignore: cast_nullable_to_non_nullable
@@ -73,6 +75,8 @@ as String,lat: null == lat ? _self.lat : lat // ignore: cast_nullable_to_non_nul
 as double,lng: null == lng ? _self.lng : lng // ignore: cast_nullable_to_non_nullable
 as double,heightM: freezed == heightM ? _self.heightM : heightM // ignore: cast_nullable_to_non_nullable
 as double?,diameterM: freezed == diameterM ? _self.diameterM : diameterM // ignore: cast_nullable_to_non_nullable
+as double?,groundElev: freezed == groundElev ? _self.groundElev : groundElev // ignore: cast_nullable_to_non_nullable
+as double?,invertElev: freezed == invertElev ? _self.invertElev : invertElev // ignore: cast_nullable_to_non_nullable
 as double?,masterId: freezed == masterId ? _self.masterId : masterId // ignore: cast_nullable_to_non_nullable
 as String?,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as WorkStatus,note: freezed == note ? _self.note : note // ignore: cast_nullable_to_non_nullable
@@ -164,10 +168,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'ground_elev', fromJson: _toNullableDouble)  double? groundElev, @JsonKey(name: 'invert_elev', fromJson: _toNullableDouble)  double? invertElev, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Manhole() when $default != null:
-return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
+return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.groundElev,_that.invertElev,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
   return orElse();
 
 }
@@ -185,10 +189,10 @@ return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diam
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'ground_elev', fromJson: _toNullableDouble)  double? groundElev, @JsonKey(name: 'invert_elev', fromJson: _toNullableDouble)  double? invertElev, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)  $default,) {final _that = this;
 switch (_that) {
 case _Manhole():
-return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
+return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.groundElev,_that.invertElev,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -205,10 +209,10 @@ return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diam
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String code, @JsonKey(fromJson: _toDouble)  double lat, @JsonKey(fromJson: _toDouble)  double lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble)  double? heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble)  double? diameterM, @JsonKey(name: 'ground_elev', fromJson: _toNullableDouble)  double? groundElev, @JsonKey(name: 'invert_elev', fromJson: _toNullableDouble)  double? invertElev, @JsonKey(name: 'master_id')  String? masterId,  WorkStatus status,  String? note, @JsonKey(name: 'created_by')  String? createdBy, @JsonKey(name: 'created_at')  DateTime? createdAt, @JsonKey(name: 'updated_at')  DateTime? updatedAt)?  $default,) {final _that = this;
 switch (_that) {
 case _Manhole() when $default != null:
-return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
+return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diameterM,_that.groundElev,_that.invertElev,_that.masterId,_that.status,_that.note,_that.createdBy,_that.createdAt,_that.updatedAt);case _:
   return null;
 
 }
@@ -220,7 +224,7 @@ return $default(_that.id,_that.code,_that.lat,_that.lng,_that.heightM,_that.diam
 
 @JsonSerializable(fieldRename: FieldRename.snake)
 class _Manhole extends Manhole {
-  const _Manhole({required this.id, required this.code, @JsonKey(fromJson: _toDouble) required this.lat, @JsonKey(fromJson: _toDouble) required this.lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble) this.heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) this.diameterM, @JsonKey(name: 'master_id') this.masterId, this.status = WorkStatus.planned, this.note, @JsonKey(name: 'created_by') this.createdBy, @JsonKey(name: 'created_at') this.createdAt, @JsonKey(name: 'updated_at') this.updatedAt}): super._();
+  const _Manhole({required this.id, required this.code, @JsonKey(fromJson: _toDouble) required this.lat, @JsonKey(fromJson: _toDouble) required this.lng, @JsonKey(name: 'height_m', fromJson: _toNullableDouble) this.heightM, @JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) this.diameterM, @JsonKey(name: 'ground_elev', fromJson: _toNullableDouble) this.groundElev, @JsonKey(name: 'invert_elev', fromJson: _toNullableDouble) this.invertElev, @JsonKey(name: 'master_id') this.masterId, this.status = WorkStatus.planned, this.note, @JsonKey(name: 'created_by') this.createdBy, @JsonKey(name: 'created_at') this.createdAt, @JsonKey(name: 'updated_at') this.updatedAt}): super._();
   factory _Manhole.fromJson(Map<String, dynamic> json) => _$ManholeFromJson(json);
 
 @override final  String id;
@@ -229,6 +233,10 @@ class _Manhole extends Manhole {
 @override@JsonKey(fromJson: _toDouble) final  double lng;
 @override@JsonKey(name: 'height_m', fromJson: _toNullableDouble) final  double? heightM;
 @override@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) final  double? diameterM;
+/// Ground level, Baltic height system (m).
+@override@JsonKey(name: 'ground_elev', fromJson: _toNullableDouble) final  double? groundElev;
+/// Pipe invert (bottom) level, Baltic height system (m).
+@override@JsonKey(name: 'invert_elev', fromJson: _toNullableDouble) final  double? invertElev;
 @override@JsonKey(name: 'master_id') final  String? masterId;
 @override@JsonKey() final  WorkStatus status;
 @override final  String? note;
@@ -249,16 +257,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Manhole&&(identical(other.id, id) || other.id == id)&&(identical(other.code, code) || other.code == code)&&(identical(other.lat, lat) || other.lat == lat)&&(identical(other.lng, lng) || other.lng == lng)&&(identical(other.heightM, heightM) || other.heightM == heightM)&&(identical(other.diameterM, diameterM) || other.diameterM == diameterM)&&(identical(other.masterId, masterId) || other.masterId == masterId)&&(identical(other.status, status) || other.status == status)&&(identical(other.note, note) || other.note == note)&&(identical(other.createdBy, createdBy) || other.createdBy == createdBy)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Manhole&&(identical(other.id, id) || other.id == id)&&(identical(other.code, code) || other.code == code)&&(identical(other.lat, lat) || other.lat == lat)&&(identical(other.lng, lng) || other.lng == lng)&&(identical(other.heightM, heightM) || other.heightM == heightM)&&(identical(other.diameterM, diameterM) || other.diameterM == diameterM)&&(identical(other.groundElev, groundElev) || other.groundElev == groundElev)&&(identical(other.invertElev, invertElev) || other.invertElev == invertElev)&&(identical(other.masterId, masterId) || other.masterId == masterId)&&(identical(other.status, status) || other.status == status)&&(identical(other.note, note) || other.note == note)&&(identical(other.createdBy, createdBy) || other.createdBy == createdBy)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,code,lat,lng,heightM,diameterM,masterId,status,note,createdBy,createdAt,updatedAt);
+int get hashCode => Object.hash(runtimeType,id,code,lat,lng,heightM,diameterM,groundElev,invertElev,masterId,status,note,createdBy,createdAt,updatedAt);
 
 @override
 String toString() {
-  return 'Manhole(id: $id, code: $code, lat: $lat, lng: $lng, heightM: $heightM, diameterM: $diameterM, masterId: $masterId, status: $status, note: $note, createdBy: $createdBy, createdAt: $createdAt, updatedAt: $updatedAt)';
+  return 'Manhole(id: $id, code: $code, lat: $lat, lng: $lng, heightM: $heightM, diameterM: $diameterM, groundElev: $groundElev, invertElev: $invertElev, masterId: $masterId, status: $status, note: $note, createdBy: $createdBy, createdAt: $createdAt, updatedAt: $updatedAt)';
 }
 
 
@@ -269,7 +277,7 @@ abstract mixin class _$ManholeCopyWith<$Res> implements $ManholeCopyWith<$Res> {
   factory _$ManholeCopyWith(_Manhole value, $Res Function(_Manhole) _then) = __$ManholeCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String code,@JsonKey(fromJson: _toDouble) double lat,@JsonKey(fromJson: _toDouble) double lng,@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? heightM,@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? diameterM,@JsonKey(name: 'master_id') String? masterId, WorkStatus status, String? note,@JsonKey(name: 'created_by') String? createdBy,@JsonKey(name: 'created_at') DateTime? createdAt,@JsonKey(name: 'updated_at') DateTime? updatedAt
+ String id, String code,@JsonKey(fromJson: _toDouble) double lat,@JsonKey(fromJson: _toDouble) double lng,@JsonKey(name: 'height_m', fromJson: _toNullableDouble) double? heightM,@JsonKey(name: 'diameter_m', fromJson: _toNullableDouble) double? diameterM,@JsonKey(name: 'ground_elev', fromJson: _toNullableDouble) double? groundElev,@JsonKey(name: 'invert_elev', fromJson: _toNullableDouble) double? invertElev,@JsonKey(name: 'master_id') String? masterId, WorkStatus status, String? note,@JsonKey(name: 'created_by') String? createdBy,@JsonKey(name: 'created_at') DateTime? createdAt,@JsonKey(name: 'updated_at') DateTime? updatedAt
 });
 
 
@@ -286,7 +294,7 @@ class __$ManholeCopyWithImpl<$Res>
 
 /// Create a copy of Manhole
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? code = null,Object? lat = null,Object? lng = null,Object? heightM = freezed,Object? diameterM = freezed,Object? masterId = freezed,Object? status = null,Object? note = freezed,Object? createdBy = freezed,Object? createdAt = freezed,Object? updatedAt = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? code = null,Object? lat = null,Object? lng = null,Object? heightM = freezed,Object? diameterM = freezed,Object? groundElev = freezed,Object? invertElev = freezed,Object? masterId = freezed,Object? status = null,Object? note = freezed,Object? createdBy = freezed,Object? createdAt = freezed,Object? updatedAt = freezed,}) {
   return _then(_Manhole(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,code: null == code ? _self.code : code // ignore: cast_nullable_to_non_nullable
@@ -294,6 +302,8 @@ as String,lat: null == lat ? _self.lat : lat // ignore: cast_nullable_to_non_nul
 as double,lng: null == lng ? _self.lng : lng // ignore: cast_nullable_to_non_nullable
 as double,heightM: freezed == heightM ? _self.heightM : heightM // ignore: cast_nullable_to_non_nullable
 as double?,diameterM: freezed == diameterM ? _self.diameterM : diameterM // ignore: cast_nullable_to_non_nullable
+as double?,groundElev: freezed == groundElev ? _self.groundElev : groundElev // ignore: cast_nullable_to_non_nullable
+as double?,invertElev: freezed == invertElev ? _self.invertElev : invertElev // ignore: cast_nullable_to_non_nullable
 as double?,masterId: freezed == masterId ? _self.masterId : masterId // ignore: cast_nullable_to_non_nullable
 as String?,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as WorkStatus,note: freezed == note ? _self.note : note // ignore: cast_nullable_to_non_nullable

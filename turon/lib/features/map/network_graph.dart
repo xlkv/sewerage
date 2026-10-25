@@ -107,6 +107,55 @@ class StatusEvent {
   );
 }
 
+abstract final class NetworkPaths {
+  /// Shortest pipe chain between two manholes ignoring flow direction
+  /// (by length). Null when they are not connected.
+  static List<String>? shortestPath(
+    String fromId,
+    String toId,
+    Iterable<Pipe> pipes,
+  ) {
+    if (fromId == toId) return const [];
+    final adj = <String, List<Pipe>>{};
+    for (final p in pipes) {
+      adj.putIfAbsent(p.fromManholeId, () => []).add(p);
+      adj.putIfAbsent(p.toManholeId, () => []).add(p);
+    }
+    final dist = <String, double>{fromId: 0};
+    final via = <String, Pipe>{};
+    final done = <String>{};
+    while (true) {
+      String? u;
+      var best = double.infinity;
+      dist.forEach((k, d) {
+        if (!done.contains(k) && d < best) {
+          best = d;
+          u = k;
+        }
+      });
+      if (u == null) return null;
+      if (u == toId) break;
+      done.add(u!);
+      for (final p in adj[u] ?? const <Pipe>[]) {
+        final v = p.fromManholeId == u ? p.toManholeId : p.fromManholeId;
+        final d = best + p.lengthM;
+        if (d < (dist[v] ?? double.infinity)) {
+          dist[v] = d;
+          via[v] = p;
+        }
+      }
+    }
+    final out = <String>[];
+    var cur = toId;
+    while (cur != fromId) {
+      final p = via[cur]!;
+      out.add(p.id);
+      cur = p.fromManholeId == cur ? p.toManholeId : p.fromManholeId;
+    }
+    return out.reversed.toList();
+  }
+}
+
 /// Network state at a moment in time, built from the status history.
 class NetworkSnapshot {
   final Map<String, Manhole> manholes;

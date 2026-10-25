@@ -120,10 +120,13 @@ class _DetailsHeaderState extends State<DetailsHeader>
                   ),
                   Text(
                     widget.code,
-                    style: const TextStyle(
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
                       color: AppColors.ink,
                       fontWeight: FontWeight.w800,
-                      fontSize: 26,
+                      // Codes (K-12) are short; section names can be long.
+                      fontSize: widget.code.length > 10 ? 20 : 26,
                       height: 1.1,
                       letterSpacing: -0.6,
                     ),

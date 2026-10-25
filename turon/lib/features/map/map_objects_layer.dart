@@ -148,6 +148,8 @@ class MapObjectsLayer {
         final m = allManholes[id];
         if (m == null) return null;
         return (lat: m.lat, lng: m.lng);
+      case SectionSelection():
+        return null;
       case PipeSelection(:final id):
         final p = allPipes[id];
         if (p == null) return null;

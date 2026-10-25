@@ -67,14 +67,15 @@ class PlacemarkMapObject implements MapObject {
     String? label,
     double? opacity,
     void Function(PlacemarkMapObject self, Point tappedPoint)? onTap,
-  }) => PlacemarkMapObject(
-    mapId: mapId ?? this.mapId,
-    point: point ?? this.point,
-    icon: icon ?? this.icon,
-    label: label ?? this.label,
-    opacity: opacity ?? this.opacity,
-    onTap: onTap ?? this.onTap,
-  );
+  }) =>
+      PlacemarkMapObject(
+        mapId: mapId ?? this.mapId,
+        point: point ?? this.point,
+        icon: icon ?? this.icon,
+        label: label ?? this.label,
+        opacity: opacity ?? this.opacity,
+        onTap: onTap ?? this.onTap,
+      );
 }
 
 /// A polyline (open path) connecting two or more [Point]s.
@@ -113,12 +114,13 @@ class PolylineMapObject implements MapObject {
     double? strokeWidth,
     double? opacity,
     void Function(PolylineMapObject self)? onTap,
-  }) => PolylineMapObject(
-    mapId: mapId ?? this.mapId,
-    coordinates: coordinates ?? this.coordinates,
-    strokeColor: strokeColor ?? this.strokeColor,
-    strokeWidth: strokeWidth ?? this.strokeWidth,
-    opacity: opacity ?? this.opacity,
-    onTap: onTap ?? this.onTap,
-  );
+  }) =>
+      PolylineMapObject(
+        mapId: mapId ?? this.mapId,
+        coordinates: coordinates ?? this.coordinates,
+        strokeColor: strokeColor ?? this.strokeColor,
+        strokeWidth: strokeWidth ?? this.strokeWidth,
+        opacity: opacity ?? this.opacity,
+        onTap: onTap ?? this.onTap,
+      );
 }

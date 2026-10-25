@@ -37,6 +37,12 @@ import '../manhole/manhole_details.dart';
 import '../manhole/manhole_form.dart';
 import '../pipe/pipe_details.dart';
 import '../pipe/pipe_form.dart';
+import '../section/section_details.dart';
+import '../section/section_form_page.dart';
+import '../section/section_pick_panel.dart';
+import '../section/section_stats.dart';
+import '../section/sections_screen.dart';
+import '../../data/repositories/section_repo.dart';
 import 'filter_sheet.dart';
 import 'map_controller.dart';
 import 'map_mode.dart';
@@ -847,6 +853,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   void _focusSelectedObject(Selection selection) {
     if (!mounted || !_hasMap) return;
+    if (selection is SectionSelection) {
+      _fitToSection(selection.id);
+      return;
+    }
 
     final allManholes = ref.read(manholesProvider).asData?.value ?? const {};
     final allPipes = ref.read(pipesProvider).asData?.value ?? const {};
@@ -1108,9 +1118,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final activeStatuses = ref.read(statusFilterProvider);
     final mapState = ref.read(mapControllerProvider);
     final traceId = ref.read(traceProvider);
-    final trace = traceId != null && ref.read(timelineProvider) == null
-        ? NetworkGraph.trace(traceId, allPipes.values)
-        : null;
+    final trace = ref.read(timelineProvider) != null
+        ? null
+        : _sectionTrace(mapState, allPipes) ??
+              (traceId != null
+                  ? NetworkGraph.trace(traceId, allPipes.values)
+                  : null);
 
     controller.animationsEnabled = !MediaQuery.disableAnimationsOf(context);
     controller.sync(
@@ -1124,6 +1137,102 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       hiddenManholeIds: data.hidden,
     );
     _updateAnimationLoop();
+  }
+
+  // ── Sections (uchastkalar) ────────────────────────────────────────────
+
+  /// Pipes being picked, or the selected section, drawn as a glow.
+  FlowTrace? _sectionTrace(MapState s, Map<String, Pipe> pipes) {
+    final Set<String> pipeIds;
+    final Set<String> extra;
+    switch ((s.mode, s.selection)) {
+      case (final SectionMode m, _):
+        pipeIds = m.pipeIds;
+        extra = {?m.startId, ?m.endId};
+      case (ViewMode(), SectionSelection(:final id)):
+        pipeIds = ref.read(sectionPipesProvider).asData?.value[id] ?? const {};
+        extra =
+            ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+      default:
+        return null;
+    }
+    return FlowTrace(
+      originId: '',
+      downstreamPipes: pipeIds,
+      downstreamManholes: SectionStats.manholesOf(pipeIds, pipes, extra: extra),
+      upstreamPipes: const {},
+      upstreamManholes: const {},
+    );
+  }
+
+  void _fitToSection(String id) {
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    final ids = ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+    _fitTo([
+      for (final m in ids)
+        if (manholes[m] case final mh?) (lat: mh.lat, lng: mh.lng),
+    ]);
+  }
+
+  ({Set<String> manholeIds, SectionStats stats}) _pickedSection(
+    SectionMode mode,
+    Map<String, Pipe> pipes,
+  ) {
+    final manholeIds = SectionStats.manholesOf(
+      mode.pipeIds,
+      pipes,
+      extra: {?mode.startId, ?mode.endId},
+    );
+    return (
+      manholeIds: manholeIds,
+      stats: SectionStats.of(
+        pipeIds: mode.pipeIds,
+        manholeCount: manholeIds.length,
+        allPipes: pipes,
+      ),
+    );
+  }
+
+  Future<void> _finishSection(SectionMode mode) async {
+    final pipes = ref.read(pipesProvider).asData?.value ?? const {};
+    final picked = _pickedSection(mode, pipes);
+    final section = mode.sectionId == null
+        ? null
+        : ref.read(sectionsProvider).asData?.value[mode.sectionId];
+    final id = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => SectionFormPage(
+          section: section,
+          pipeIds: mode.pipeIds,
+          manholeIds: picked.manholeIds,
+          stats: picked.stats,
+        ),
+      ),
+    );
+    if (id == null || !mounted) return;
+    ref
+        .read(mapControllerProvider.notifier)
+        .onFormSaved(selection: SectionSelection(id));
+    final manholes = ref.read(manholesProvider).asData?.value ?? const {};
+    _fitTo([
+      for (final m in picked.manholeIds)
+        if (manholes[m] case final mh?) (lat: mh.lat, lng: mh.lng),
+    ]);
+  }
+
+  Future<void> _openSections({required bool isAdmin}) async {
+    final notifier = ref.read(mapControllerProvider.notifier);
+    final id = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => SectionsScreen(
+          isAdmin: isAdmin,
+          onCreate: () => notifier.startSection(isAdmin: isAdmin),
+        ),
+      ),
+    );
+    if (id == null || !mounted) return;
+    ref.read(traceProvider.notifier).clear();
+    notifier.select(SectionSelection(id));
   }
 
   Future<void> _saveMoveManhole(MoveManholeMode mode) async {
@@ -1240,6 +1349,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             isAdmin: isAdmin,
           ),
           onSelectPipe: (pipeId) => notifier.select(PipeSelection(pipeId)),
+          onSelectManhole: (mid) => notifier.select(ManholeSelection(mid)),
           onDeleted: notifier.clearSelection,
           onTrace: () {
             ref.read(traceProvider.notifier).show(id);
@@ -1259,6 +1369,32 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           onEdit: () => notifier.openEditPipeForm(id, isAdmin: isAdmin),
           onSelectManhole: (manholeId) =>
               notifier.select(ManholeSelection(manholeId)),
+          onSelectSection: (sectionId) =>
+              notifier.select(SectionSelection(sectionId)),
+          onDeleted: notifier.clearSelection,
+        );
+      case SectionSelection(:final id):
+        final section = ref.read(sectionsProvider).asData?.value[id];
+        if (section == null) return null;
+        final pipeIds =
+            ref.read(sectionPipesProvider).asData?.value[id] ?? const {};
+        final manholeIds =
+            ref.read(sectionManholesProvider).asData?.value[id] ?? const {};
+        return (context, scrollController) => SectionDetails(
+          key: ValueKey('details_section_$id'),
+          section: section,
+          pipeIds: pipeIds,
+          manholeIds: manholeIds,
+          allPipes: pipes,
+          allManholes: manholes,
+          isAdmin: isAdmin,
+          scrollController: scrollController,
+          onClose: notifier.clearSelection,
+          onEditPipes: () => notifier.startSection(
+            sectionId: id,
+            pipeIds: pipeIds,
+            isAdmin: isAdmin,
+          ),
           onDeleted: notifier.clearSelection,
         );
     }
@@ -1276,6 +1412,19 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final traceId = ref.watch(traceProvider);
     final timeline = ref.watch(timelineProvider);
     ref.watch(statusEventsProvider);
+    ref.watch(sectionsProvider);
+    ref.watch(sectionPipesProvider);
+    ref.watch(sectionManholesProvider);
+
+    ref.listen(sectionPipesProvider, (_, _) => _syncMapObjects());
+    ref.listen(sectionManholesProvider, (prev, next) {
+      _syncMapObjects();
+      // A section opened from the list before its membership loaded.
+      final sel = ref.read(mapControllerProvider).selection;
+      if (prev?.asData == null && sel is SectionSelection) {
+        _fitToSection(sel.id);
+      }
+    });
 
     ref.listen<MapLayer>(mapLayerProvider, (_, next) {
       _applyMapLayer(next);
@@ -1397,6 +1546,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           fullName: profile?.fullName,
           onTimeline: _openTimeline,
           onReport: _shareReport,
+          onSections: () => _openSections(isAdmin: isAdmin),
           onSignOut: () async {
             await ref.read(authRepoProvider).signOut();
           },
@@ -1635,8 +1785,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ),
                 ),
+              if (mapState.mode case final SectionMode sm)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  child: SafeArea(
+                    top: false,
+                    child: SectionPickPanel(
+                      stats: _pickedSection(sm, allPipes).stats,
+                      onUndoAll: sm.pipeIds.isEmpty && sm.startId == null
+                          ? null
+                          : () => ref
+                                .read(mapControllerProvider.notifier)
+                                .startSection(sectionId: sm.sectionId),
+                      onNext: sm.pipeIds.isEmpty
+                          ? null
+                          : () => _finishSection(sm),
+                    ),
+                  ),
+                ),
               // Bottom-right: my location + admin speed dial
-              if (mapState.activeForm == null && timeline == null)
+              if (mapState.activeForm == null &&
+                  timeline == null &&
+                  mapState.mode is! SectionMode)
                 Positioned(
                   right: 16,
                   bottom: 16,
@@ -1664,6 +1836,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           const SizedBox(height: 14),
                           SpeedDial(
                             actions: [
+                              SpeedDialAction(
+                                icon: Icons.route_rounded,
+                                label: 'Uchastka',
+                                onPressed: () => ref
+                                    .read(mapControllerProvider.notifier)
+                                    .startSection(isAdmin: isAdmin),
+                              ),
                               SpeedDialAction(
                                 icon: Icons.timeline_rounded,
                                 label: 'Quvur',
@@ -1699,6 +1878,7 @@ class _TuronNavigationDrawer extends StatelessWidget {
   final Future<void> Function() onSignOut;
   final VoidCallback onTimeline;
   final Future<void> Function() onReport;
+  final VoidCallback onSections;
 
   const _TuronNavigationDrawer({
     required this.isAdmin,
@@ -1706,12 +1886,18 @@ class _TuronNavigationDrawer extends StatelessWidget {
     required this.onSignOut,
     required this.onTimeline,
     required this.onReport,
+    required this.onSections,
   });
 
   @override
   Widget build(BuildContext context) {
     final destinations = <({String label, IconData icon, String? route})>[
       (label: 'Xarita', icon: Icons.map_outlined, route: null),
+      (
+        label: 'Uchastkalar',
+        icon: Icons.route_rounded,
+        route: '__sections__',
+      ),
       (
         label: 'Qurilish taymlayni',
         icon: Icons.history_rounded,
@@ -1748,6 +1934,10 @@ class _TuronNavigationDrawer extends StatelessWidget {
         }
         if (item.route == '__logout__') {
           await onSignOut();
+          return;
+        }
+        if (item.route == '__sections__') {
+          onSections();
           return;
         }
         if (item.route == '__timeline__') {

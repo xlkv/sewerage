@@ -13,6 +13,8 @@ _Manhole _$ManholeFromJson(Map<String, dynamic> json) => _Manhole(
   lng: _toDouble(json['lng']),
   heightM: _toNullableDouble(json['height_m']),
   diameterM: _toNullableDouble(json['diameter_m']),
+  groundElev: _toNullableDouble(json['ground_elev']),
+  invertElev: _toNullableDouble(json['invert_elev']),
   masterId: json['master_id'] as String?,
   status:
       $enumDecodeNullable(_$WorkStatusEnumMap, json['status']) ??
@@ -34,6 +36,8 @@ Map<String, dynamic> _$ManholeToJson(_Manhole instance) => <String, dynamic>{
   'lng': instance.lng,
   'height_m': instance.heightM,
   'diameter_m': instance.diameterM,
+  'ground_elev': instance.groundElev,
+  'invert_elev': instance.invertElev,
   'master_id': instance.masterId,
   'status': _$WorkStatusEnumMap[instance.status]!,
   'note': instance.note,

@@ -23,6 +23,8 @@ class CrossSectionPipe {
 class ManholeCrossSection extends StatefulWidget {
   final double? depthM;
   final double? diameterM;
+  final double? groundElev;
+  final double? invertElev;
   final WorkStatus status;
   final List<CrossSectionPipe> incoming;
   final List<CrossSectionPipe> outgoing;
@@ -31,6 +33,8 @@ class ManholeCrossSection extends StatefulWidget {
     super.key,
     required this.depthM,
     required this.diameterM,
+    this.groundElev,
+    this.invertElev,
     required this.status,
     required this.incoming,
     required this.outgoing,
@@ -79,6 +83,8 @@ class _ManholeCrossSectionState extends State<ManholeCrossSection>
             flow: _flow,
             depthM: widget.depthM,
             diameterM: widget.diameterM,
+            groundElev: widget.groundElev,
+            invertElev: widget.invertElev,
             status: widget.status,
             incoming: widget.incoming,
             outgoing: widget.outgoing,
@@ -94,6 +100,8 @@ class _CrossSectionPainter extends CustomPainter {
   final Animation<double> flow;
   final double? depthM;
   final double? diameterM;
+  final double? groundElev;
+  final double? invertElev;
   final WorkStatus status;
   final List<CrossSectionPipe> incoming;
   final List<CrossSectionPipe> outgoing;
@@ -102,6 +110,8 @@ class _CrossSectionPainter extends CustomPainter {
     required this.flow,
     required this.depthM,
     required this.diameterM,
+    this.groundElev,
+    this.invertElev,
     required this.status,
     required this.incoming,
     required this.outgoing,
@@ -289,7 +299,25 @@ class _CrossSectionPainter extends CustomPainter {
       bold: true,
     );
 
-    _text(canvas, 'Yer sathi', const Offset(8, groundY - 18), color: AppColors.muted);
+    _text(
+      canvas,
+      groundElev == null
+          ? 'Yer sathi'
+          : 'Yer sathi  +${groundElev!.toStringAsFixed(2)}',
+      const Offset(8, groundY - 18),
+      color: groundElev == null ? AppColors.muted : AppColors.ink,
+      bold: groundElev != null,
+    );
+    if (invertElev != null) {
+      // Invert level mark at the shaft bottom (Baltic system).
+      _text(
+        canvas,
+        '▽ ${invertElev!.toStringAsFixed(2)}',
+        Offset(shaftLeft - 6, bottomY - 14),
+        align: TextAlign.right,
+        bold: true,
+      );
+    }
   }
 
   void _text(
@@ -324,6 +352,8 @@ class _CrossSectionPainter extends CustomPainter {
   bool shouldRepaint(covariant _CrossSectionPainter old) =>
       old.depthM != depthM ||
       old.diameterM != diameterM ||
+      old.groundElev != groundElev ||
+      old.invertElev != invertElev ||
       old.status != status ||
       old.incoming != incoming ||
       old.outgoing != outgoing;
